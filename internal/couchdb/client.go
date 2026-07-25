@@ -241,7 +241,7 @@ func urlEncodeDocID(id string) string {
 		case b == '/':
 			encoded.WriteByte('/')
 		case (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
-			(b >= '0' && b <= '9') || b == '-' || b == '.' || b == '_' || b == '~':
+			(b >= '0' && b <= '9') || b == '-' || b == '.' || b == '_' || b == '~' || b == ':':
 			encoded.WriteByte(b)
 		default:
 			encoded.WriteString(fmt.Sprintf("%%%02X", b))

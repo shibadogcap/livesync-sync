@@ -27,6 +27,7 @@ type FileEntry struct {
 	Children []string              `json:"children,omitempty"` // Chunk document IDs
 	Data     *string               `json:"data,omitempty"`     // Inline content (newnote/binary)
 	Deleted  bool                  `json:"deleted,omitempty"`
+	DeletedFromPlugin bool         `json:"_deleted,omitempty"` // TS sets _deleted for deletes
 	Eden     map[string]EdenChunk  `json:"eden,omitempty"`
 }
 
@@ -129,3 +130,13 @@ const (
 	// Default E2EE algorithm
 	DefaultE2EEAlgorithm = "v2"
 )
+
+// CurrentHashAlg tracks the active hash algorithm (may be overridden by remote tweaks)
+var CurrentHashAlg = DefaultHashAlg
+
+// SetHashAlg updates the active hash algorithm for chunk ID computation.
+func SetHashAlg(alg string) {
+	if alg != "" {
+		CurrentHashAlg = alg
+	}
+}

@@ -36,6 +36,8 @@ type PeerConf struct {
 	Passphrase          string   `yaml:"passphrase,omitempty" json:"passphrase,omitempty"`
 	ObfuscatePassphrase string   `yaml:"obfuscatePassphrase,omitempty" json:"obfuscatePassphrase,omitempty"`
 	UseRemoteTweaks     *bool    `yaml:"useRemoteTweaks,omitempty" json:"useRemoteTweaks,omitempty"`
+	HashAlg             string   `yaml:"hashAlg,omitempty" json:"hashAlg,omitempty"`
+	MinimumChunkSize    *int     `yaml:"minimumChunkSize,omitempty" json:"minimumChunkSize,omitempty"`
 	IncludeInternal     []string `yaml:"includeInternal,omitempty" json:"includeInternal,omitempty"`
 
 	// Storage-specific fields

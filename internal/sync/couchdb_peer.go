@@ -147,8 +147,17 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 	fileType := model.TypePlain
 	if !isText {
 		fileType = model.TypeNewnote
-		// Binary files store content inline (newnote format)
-		dataStr := string(data.Data)
+		// Binary files store content inline (newnote format), encrypted if passphrase is set
+		var dataStr string
+		if p.config.Passphrase != "" {
+			encrypted, err := ccrypto.EncryptV2(data.Data, p.params)
+			if err != nil {
+				return false, fmt.Errorf("binary encrypt failed: %w", err)
+			}
+			dataStr = encrypted
+		} else {
+			dataStr = string(data.Data)
+		}
 		fileEntry := model.FileEntry{
 			Rev:      existingRev,
 			Path:     localPath,
@@ -176,7 +185,7 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 			return false, fmt.Errorf("chunk encrypt failed: %w", err)
 		}
 
-		chunkID, err := model.ComputeChunkID(chunk, p.config.Passphrase, model.DefaultHashAlg)
+		chunkID, err := model.ComputeChunkID(chunk, p.config.Passphrase, model.CurrentHashAlg)
 		if err != nil {
 			return false, fmt.Errorf("chunk ID computation failed: %w", err)
 		}
@@ -308,7 +317,7 @@ func (p *CouchDBPeer) Get(path string) (*FileData, error) {
 		return nil, err
 	}
 
-	if entry.Deleted {
+	if entry.Deleted || entry.DeletedFromPlugin {
 		return &FileData{Deleted: true}, nil
 	}
 
@@ -316,9 +325,17 @@ func (p *CouchDBPeer) Get(path string) (*FileData, error) {
 
 	switch entry.Type {
 	case model.TypeNewnote:
-		// Binary files: content is inline in the Data field
+		// Binary files: content is inline in the Data field (may be encrypted)
 		if entry.Data != nil {
-			content = []byte(*entry.Data)
+			if p.config.Passphrase != "" {
+				decrypted, err := ccrypto.DecryptAuto(*entry.Data, p.params)
+				if err != nil {
+					return nil, fmt.Errorf("binary decrypt failed: %w", err)
+				}
+				content = decrypted
+			} else {
+				content = []byte(*entry.Data)
+			}
 		}
 	case model.TypePlain:
 		// Text files: content is in encrypted chunks
@@ -527,8 +544,18 @@ func (p *CouchDBPeer) processFileChange(change couchdb.Change) {
 		return
 	}
 
-	// Skip non-file entries
-	if entry.Type != model.TypePlain && entry.Type != model.TypeNewnote {
+	// Skip non-file entries (unless it's a deletion)
+	if entry.Type != model.TypePlain && entry.Type != model.TypeNewnote && !entry.DeletedFromPlugin {
+		return
+	}
+
+	// Check if this was a deletion (supports both `deleted` and `_deleted` fields)
+	if entry.Deleted || entry.DeletedFromPlugin {
+		filePath := entry.Path
+		if filePath == "" {
+			filePath = change.ID
+		}
+		p.dispatch(p, p.ToGlobalPath(filePath), &FileData{Deleted: true})
 		return
 	}
 
@@ -654,6 +681,16 @@ func (p *CouchDBPeer) applyTweaks(milestone model.MilestoneDoc) {
 		if tweaks.CustomChunkSize != nil {
 			p.splitter = p.createSplitter(*tweaks.CustomChunkSize, tweaks.ChunkSplitterVersion)
 		}
+		// hashAlg affects chunk ID computation — important for sync compatibility
+		if tweaks.HashAlg != "" {
+			p.config.HashAlg = tweaks.HashAlg
+			model.SetHashAlg(tweaks.HashAlg)
+		}
+		// Handle filename case sensitivity
+		if tweaks.HandleFilenameCaseSensitive {
+			p.converter = model.NewPathConverter(p.config.BaseDir)
+			p.converter.CaseInsensitive = !tweaks.HandleFilenameCaseSensitive
+		}
 		slog.Info("[CouchDB] Remote tweaks applied",
 			"encrypt", tweaks.Encrypt,
 			"chunkSplitter", tweaks.ChunkSplitterVersion,
@@ -666,7 +703,9 @@ func (p *CouchDBPeer) applyTweaks(milestone model.MilestoneDoc) {
 func (p *CouchDBPeer) createSplitter(customSize int, version string) model.ChunkSplitter {
 	cfg := model.ChunkConfig{
 		CustomChunkSize: customSize,
-		MinimumChunkSize: 0,
+	}
+	if p.config.MinimumChunkSize != nil {
+		cfg.MinimumChunkSize = *p.config.MinimumChunkSize
 	}
 	switch version {
 	case "v3-rabin-karp", "":
@@ -703,26 +742,24 @@ func (p *CouchDBPeer) probeWithBackoff() error {
 
 // isPlainText determines if a file path should be treated as plain text.
 // Matches obsidian-livesync's isPlainText() from string_and_binary/path.ts.
-// Binary files use newnote storage (inline data) instead of chunked storage.
+// Uses the exact same whitelist approach: only known text extensions return true.
+// Everything else (including unknown extensions) is treated as binary (newnote).
 func isPlainText(path string) bool {
 	ext := strings.ToLower(path)
-	// Common binary extensions that should NOT be split into chunks
-	binaryExts := []string{
-		".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp", ".ico",
-		".mp3", ".mp4", ".wav", ".ogg", ".flac", ".avi", ".mov", ".mkv",
-		".zip", ".gz", ".tar", ".rar", ".7z",
-		".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-		".exe", ".dll", ".so", ".dylib", ".wasm",
-		".ttf", ".otf", ".woff", ".woff2",
-		".pyc", ".class", ".o", ".obj",
+	switch {
+	case strings.HasSuffix(ext, ".md"),
+		strings.HasSuffix(ext, ".txt"),
+		strings.HasSuffix(ext, ".svg"),
+		strings.HasSuffix(ext, ".html"),
+		strings.HasSuffix(ext, ".csv"),
+		strings.HasSuffix(ext, ".css"),
+		strings.HasSuffix(ext, ".js"),
+		strings.HasSuffix(ext, ".xml"),
+		strings.HasSuffix(ext, ".canvas"):
+		return true
+	default:
+		return false
 	}
-	for _, be := range binaryExts {
-		if strings.HasSuffix(ext, be) {
-			return false
-		}
-	}
-	// Treat as text by default (this matches Obsidian vault content which is mostly markdown)
-	return true
 }
 
 // extractPathFromChange extracts the file path from a changes feed change entry.
