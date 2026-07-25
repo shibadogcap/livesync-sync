@@ -243,22 +243,19 @@ func (c *Client) EnsureDB() error {
 }
 
 // urlEncodeDocID properly encodes document IDs for URLs.
-// Document IDs with special characters need URL encoding,
-// but "/" in the path should be preserved.
+// Encodes each byte of the UTF-8 representation, not Unicode codepoints.
+// Preserves forward slashes as path separators.
 func urlEncodeDocID(id string) string {
-	// For local documents and normal documents, we need to encode special chars
-	// but preserve forward slashes
-	encoded := strings.Builder{}
-	for _, r := range id {
-		if r == '/' {
-			encoded.WriteRune('/')
-		} else if r == '_' {
-			encoded.WriteRune('_')
-		} else if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '.' || r == '~' {
-			encoded.WriteRune(r)
-		} else {
-			// URL encode
-			encoded.WriteString(fmt.Sprintf("%%%02X", r))
+	var encoded strings.Builder
+	for _, b := range []byte(id) {
+		switch {
+		case b == '/':
+			encoded.WriteByte('/')
+		case (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+			(b >= '0' && b <= '9') || b == '-' || b == '.' || b == '_' || b == '~':
+			encoded.WriteByte(b)
+		default:
+			encoded.WriteString(fmt.Sprintf("%%%02X", b))
 		}
 	}
 	return encoded.String()

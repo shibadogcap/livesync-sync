@@ -249,5 +249,4 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// Ensure unused import is used
-var _ = runtime.GOOS
+

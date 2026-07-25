@@ -4,6 +4,8 @@
 package sync
 
 import (
+	"bytes"
+	"container/list"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -125,65 +127,85 @@ func (bp *BasePeer) IsRepeating(path string, data *FileData) (bool, error) {
 }
 
 // computeContentHash computes a SHA-256 hash of content for dedup.
+// Normalizes CRLF to LF before hashing (matching TS computeHash behavior)
+// so cross-platform sync works correctly.
 func computeContentHash(data []byte) string {
-	h := sha256.Sum256(data)
+	// Normalize \r\n to \n (TS: data.join("").replace(/\r\n/g, "\n"))
+	normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	h := sha256.Sum256(normalized)
 	return hex.EncodeToString(h[:])
 }
 
-// DedupCache is an LRU cache for deduplication.
+// DedupCache is a proper LRU cache for deduplication.
 // Matches livesync-now's LRUCache<string, string>(5000, 1000000000, true).
 type DedupCache struct {
 	mu       sync.Mutex
 	capacity int
 	maxSize  int64
 	current  int64
-	items    map[string]*cacheEntry
-	order    []string // Simple FIFO for eviction
+	items    map[string]*list.Element
+	order    *list.List // Doubly-linked list for true LRU ordering
 }
 
 type cacheEntry struct {
+	key   string
 	value string
 	size  int64
 }
 
-// NewDedupCache creates a new dedup cache.
+// NewDedupCache creates a new LRU dedup cache.
 func NewDedupCache(capacity int, maxSize int64) *DedupCache {
 	return &DedupCache{
 		capacity: capacity,
 		maxSize:  maxSize,
-		items:    make(map[string]*cacheEntry),
+		items:    make(map[string]*list.Element),
+		order:    list.New(),
 	}
 }
 
 // Check returns true if the path+hash combination already exists (is a repeat).
-// If new, stores it.
+// If new, stores it. If the path exists with a different hash, updates it.
 func (dc *DedupCache) Check(path, hash string) (bool, error) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 
-	entry, exists := dc.items[path]
-	if exists && entry.value == hash {
-		return true, nil
+	if el, exists := dc.items[path]; exists {
+		entry := el.Value.(*cacheEntry)
+		if entry.value == hash {
+			// Same hash — move to front (LRU promotion) and return true
+			dc.order.MoveToFront(el)
+			return true, nil
+		}
+		// Different hash — update value and move to front
+		dc.current -= entry.size
+		entry.value = hash
+		entry.size = int64(len(path) + len(hash))
+		dc.current += entry.size
+		dc.order.MoveToFront(el)
+		return false, nil
 	}
 
-	// Evict if needed
-	if len(dc.items) >= dc.capacity {
+	// Evict while over capacity or over maxSize
+	for dc.order.Len() >= dc.capacity || (dc.maxSize > 0 && dc.current > dc.maxSize) {
 		dc.evict()
 	}
 
-	// Store new entry
+	// Store new entry at front
 	size := int64(len(path) + len(hash))
-	dc.items[path] = &cacheEntry{value: hash, size: size}
-	dc.order = append(dc.order, path)
+	entry := &cacheEntry{key: path, value: hash, size: size}
+	el := dc.order.PushFront(entry)
+	dc.items[path] = el
+	dc.current += size
 
 	return false, nil
 }
 
 func (dc *DedupCache) evict() {
-	if len(dc.order) == 0 {
+	el := dc.order.Back()
+	if el == nil {
 		return
 	}
-	oldest := dc.order[0]
-	dc.order = dc.order[1:]
-	delete(dc.items, oldest)
+	entry := dc.order.Remove(el).(*cacheEntry)
+	dc.current -= entry.size
+	delete(dc.items, entry.key)
 }

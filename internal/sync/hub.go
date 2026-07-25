@@ -45,10 +45,19 @@ func NewHub(conf *config.FullConfig, store *state.Store) *Hub {
 
 // Start initializes all peers and begins synchronization.
 // Startup order (matching livesync-now):
-//  1. CouchDB peers start first (await all)
-//  2. Storage peers start after
+//  1. Stop any existing peers (prevents duplicates on re-start)
+//  2. CouchDB peers start first (await all)
+//  3. Storage peers start after
 func (h *Hub) Start() error {
 	slog.Info("[Hub] Starting...")
+
+	// Stop any existing peers first (matches TS Hub.start() behavior)
+	for _, p := range h.peers {
+		if err := p.Stop(); err != nil {
+			slog.Warn("[Hub] Error stopping existing peer", "name", p.Name(), "error", err)
+		}
+	}
+	h.peers = make([]Peer, 0)
 
 	// Separate peers by type
 	var couchdbPeers []*CouchDBPeer
@@ -158,7 +167,9 @@ func (h *Hub) dispatch(source Peer, path string, data *FileData) {
 	}()
 }
 
-// Peers returns the list of all peers.
+// Peers returns a copy of the peers list (prevents caller mutation of internal state).
 func (h *Hub) Peers() []Peer {
-	return h.peers
+	result := make([]Peer, len(h.peers))
+	copy(result, h.peers)
+	return result
 }

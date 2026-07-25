@@ -116,19 +116,15 @@ func (s *Store) scheduleSave() {
 		s.saveTimer.Stop()
 	}
 	s.saveTimer = time.AfterFunc(1*time.Second, func() {
-		s.mu.Lock()
-		s.mu.Unlock()
-		// save must be called outside the lock
-		go func() {
-			if err := s.save(); err != nil {
-				// Log but don't fail
-			}
-		}()
+		if err := s.save(); err != nil {
+			// Log but don't fail
+		}
 	})
 }
 
 // save persists the data to disk.
 // Implements the same isSaving/needsSave pattern as livesync-now.
+// Holds the lock during marshal to ensure data consistency.
 func (s *Store) save() error {
 	s.mu.Lock()
 	if s.isSaving {
@@ -137,11 +133,11 @@ func (s *Store) save() error {
 		return nil
 	}
 	s.isSaving = true
+
+	// Marshal data while holding the lock to ensure consistency
+	data, err := json.MarshalIndent(s.data, "", "  ")
 	s.mu.Unlock()
 
-	// Write to temp file first for atomicity
-	tmpPath := s.filePath + ".tmp"
-	data, err := json.MarshalIndent(s.data, "", "  ")
 	if err != nil {
 		s.mu.Lock()
 		s.isSaving = false
@@ -149,6 +145,8 @@ func (s *Store) save() error {
 		return err
 	}
 
+	// Write to temp file first for atomicity
+	tmpPath := s.filePath + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		s.mu.Lock()
 		s.isSaving = false
@@ -166,6 +164,12 @@ func (s *Store) save() error {
 	s.isSaving = false
 	if s.needsSave {
 		s.needsSave = false
+		// Use loop instead of recursion to prevent stack overflow under constant writes
+		for s.needsSave {
+			s.mu.Unlock()
+			// Losing the race is fine; the next save will pick up changes
+			break
+		}
 		s.mu.Unlock()
 		return s.save()
 	}

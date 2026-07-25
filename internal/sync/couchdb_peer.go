@@ -264,20 +264,10 @@ func (p *CouchDBPeer) Get(path string) (*FileData, error) {
 		return &FileData{Deleted: true}, nil
 	}
 
-	// Fetch chunks
+	// Fetch and decrypt chunks (fetchChunks decrypts each chunk individually)
 	content, err := p.fetchChunks(entry.Children)
 	if err != nil {
 		return nil, err
-	}
-
-	// Decrypt if needed
-	if p.config.Passphrase != "" && len(content) > 0 {
-		decrypted, err := ccrypto.DecryptAuto(string(content), p.params)
-		if err != nil {
-			slog.Warn("[CouchDB] Decrypt failed, using raw content", "path", path, "error", err)
-		} else {
-			content = decrypted
-		}
 	}
 
 	return &FileData{
@@ -586,16 +576,36 @@ func (p *CouchDBPeer) applyTweaks(milestone model.MilestoneDoc) {
 		// Validate encryption settings
 		if tweaks.Encrypt && p.config.Passphrase == "" {
 			slog.Warn("[CouchDB] Remote DB has encryption enabled but no passphrase provided")
+			continue
 		}
 		if tweaks.UsePathObfuscation && p.config.ObfuscatePassphrase == "" {
 			slog.Warn("[CouchDB] Remote DB has path obfuscation but no obfuscation passphrase")
+			continue
 		}
 
+		// Apply remote tweaks to configuration (matching TS PeerCouchDB.start())
+		if tweaks.CustomChunkSize != nil {
+			p.splitter = p.createSplitter(*tweaks.CustomChunkSize, tweaks.ChunkSplitterVersion)
+		}
 		slog.Info("[CouchDB] Remote tweaks applied",
 			"encrypt", tweaks.Encrypt,
 			"chunkSplitter", tweaks.ChunkSplitterVersion,
 			"hashAlg", tweaks.HashAlg,
 		)
+	}
+}
+
+// createSplitter creates a chunk splitter with the given config.
+func (p *CouchDBPeer) createSplitter(customSize int, version string) model.ChunkSplitter {
+	cfg := model.ChunkConfig{
+		CustomChunkSize: customSize,
+		MinimumChunkSize: 0,
+	}
+	switch version {
+	case "v3-rabin-karp", "":
+		return model.NewV3RabinKarpSplitter(cfg)
+	default:
+		return model.NewV2Splitter(cfg)
 	}
 }
 

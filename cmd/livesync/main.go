@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 
 	"github.com/user/livesync-sync/internal/api"
@@ -170,10 +172,20 @@ func waitForSignal() {
 func openFolder(path string) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
+		slog.Warn("[App] Cannot open vault folder", "path", path, "error", err)
 		return
 	}
-	// Best-effort, we just log
-	_ = abs
+	slog.Info("[App] Opening vault folder", "path", abs)
+	switch runtime.GOOS {
+	case "linux":
+		exec.Command("xdg-open", abs).Start()
+	case "windows":
+		exec.Command("explorer", abs).Start()
+	case "darwin":
+		exec.Command("open", abs).Start()
+	default:
+		slog.Info("[App] Open folder manually:", "path", abs)
+	}
 }
 
 func parseFlags() *bool {

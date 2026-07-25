@@ -295,12 +295,17 @@ func SaveConfig(cfg *FullConfig) error {
 	}
 
 	// Atomic write: write to temp file then rename
+	// Use 0600 because the config contains passwords and passphrases
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("write config failed: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("rename config failed: %w", err)
+	}
+	// Ensure the final file has the correct permissions regardless of umask
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("chmod config failed: %w", err)
 	}
 
 	slog.Info("[Config] Saved to", "path", path)
