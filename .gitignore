@@ -12,3 +12,4 @@ state.json
 .livesync_storage.json
 *.log
 .tmp
+/livesync

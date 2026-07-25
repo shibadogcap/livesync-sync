@@ -54,7 +54,7 @@ func (pc *PathConverter) ToLocalPath(path string) string {
 // ToGlobalPath converts a local filesystem path to a global (CouchDB-relative) path.
 // Matches Peer.toGlobalPath() in livesync-now:
 //  1. Strip leading "_" from internal files
-//  2. Strip baseDir prefix
+//  2. Strip baseDir prefix (normalized)
 //  3. Normalize backslashes
 func (pc *PathConverter) ToGlobalPath(path string) string {
 	// Strip leading "_"
@@ -63,9 +63,16 @@ func (pc *PathConverter) ToGlobalPath(path string) string {
 		result = result[1:]
 	}
 
-	// Strip baseDir prefix
-	if strings.HasPrefix(result, pc.BaseDir) {
-		result = strings.TrimPrefix(result, pc.BaseDir)
+	// Strip baseDir prefix (try both configured and normalized versions)
+	baseDir := pc.BaseDir
+	if strings.HasPrefix(result, baseDir) {
+		result = strings.TrimPrefix(result, baseDir)
+	} else {
+		// Try with cleaned baseDir (e.g., "./vault" → "vault")
+		cleaned := filepath.Clean(baseDir)
+		if cleaned != baseDir && strings.HasPrefix(result, cleaned) {
+			result = strings.TrimPrefix(result, cleaned)
+		}
 	}
 
 	// Normalize backslashes

@@ -26,6 +26,9 @@ type Hub struct {
 	taskQueue      []func()
 	mu             sync.Mutex
 	cond           *sync.Cond
+
+	// Graceful shutdown
+	wg sync.WaitGroup
 }
 
 // NewHub creates a new Hub.
