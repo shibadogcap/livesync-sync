@@ -11,3 +11,4 @@ __pycache__/
 state.json
 .livesync_storage.json
 *.log
+.tmp
