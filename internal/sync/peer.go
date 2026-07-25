@@ -185,13 +185,15 @@ func (dc *DedupCache) Check(path, hash string) (bool, error) {
 		return false, nil
 	}
 
-	// Evict while over capacity or over maxSize
-	for dc.order.Len() >= dc.capacity || (dc.maxSize > 0 && dc.current > dc.maxSize) {
+	// Calculate size for new entry
+	size := int64(len(path) + len(hash))
+
+	// Evict while over capacity or over maxSize (use > not >= to avoid constant eviction at boundary)
+	for dc.order.Len() > dc.capacity || (dc.maxSize > 0 && dc.current+size > dc.maxSize) {
 		dc.evict()
 	}
 
 	// Store new entry at front
-	size := int64(len(path) + len(hash))
 	entry := &cacheEntry{key: path, value: hash, size: size}
 	el := dc.order.PushFront(entry)
 	dc.items[path] = el

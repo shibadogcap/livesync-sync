@@ -14,6 +14,8 @@ type FileData struct {
 
 // FileEntry is the metadata document stored in CouchDB (f: prefix).
 // Matches obsidian-livesync's NewEntry / PlainEntry.
+// For "newnote" (binary) entries, Data contains the inline content.
+// For "plain" (text) entries, content is in Children chunks.
 type FileEntry struct {
 	ID       string                `json:"_id,omitempty"`
 	Rev      string                `json:"_rev,omitempty"`
@@ -22,7 +24,8 @@ type FileEntry struct {
 	MTime    int64                 `json:"mtime"`
 	Size     int64                 `json:"size"`
 	Type     string                `json:"type"`             // "plain" | "newnote"
-	Children []string              `json:"children"`         // Chunk document IDs
+	Children []string              `json:"children,omitempty"` // Chunk document IDs
+	Data     *string               `json:"data,omitempty"`     // Inline content (newnote/binary)
 	Deleted  bool                  `json:"deleted,omitempty"`
 	Eden     map[string]EdenChunk  `json:"eden,omitempty"`
 }

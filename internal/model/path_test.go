@@ -26,8 +26,8 @@ func TestToLocalPath(t *testing.T) {
 		{"", "", ""},
 		{".", "", ""},
 
-		// "_" prefix → add "/" prefix
-		{"", "_config/test.md", "/_config/test.md"},
+		// "_" prefix — no longer special-cased (TS compatibility)
+		{"", "_config/test.md", "_config/test.md"},
 		{"/vault", "_config/test.md", "/vault/_config/test.md"},
 
 		// Windows backslash normalization

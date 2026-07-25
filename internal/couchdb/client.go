@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,11 @@ type Client struct {
 	username string
 	password string
 	client   *http.Client
+
+	// Reusable changes feed client (prevents connection leak on repeated calls)
+	changesMu      sync.Mutex
+	changesClient  *http.Client
+	changesTimeout time.Duration
 }
 
 // NewClient creates a new CouchDB client.
@@ -225,23 +231,6 @@ func (c *Client) DeleteDoc(id, rev string) error {
 	return nil
 }
 
-// EnsureDB creates the database if it doesn't exist.
-func (c *Client) EnsureDB() error {
-	resp, err := c.request("PUT", c.dbURL(), nil)
-	if err != nil {
-		return fmt.Errorf("PUT db failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// 201 Created or 412 Precondition Failed (already exists) are both OK
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusPreconditionFailed {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ensure DB returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
 // urlEncodeDocID properly encodes document IDs for URLs.
 // Encodes each byte of the UTF-8 representation, not Unicode codepoints.
 // Preserves forward slashes as path separators.
@@ -296,4 +285,42 @@ type DatabaseInfo struct {
 		External int64 `json:"external"`
 		Active   int64 `json:"active"`
 	} `json:"sizes"`
+}
+
+// getChangesClient returns a long-poll HTTP client, reusing it to prevent connection leaks.
+func (c *Client) getChangesClient(timeout time.Duration) *http.Client {
+	c.changesMu.Lock()
+	defer c.changesMu.Unlock()
+
+	if c.changesClient != nil && c.changesTimeout == timeout {
+		return c.changesClient
+	}
+
+	// Create new client (timeout changed or first call)
+	c.changesClient = &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			MaxIdleConns:    5,
+			IdleConnTimeout: 90 * time.Second,
+		},
+	}
+	c.changesTimeout = timeout
+	return c.changesClient
+}
+
+// EnsureDB creates the database if it doesn't exist.
+func (c *Client) EnsureDB() error {
+	resp, err := c.request("PUT", c.dbURL(), nil)
+	if err != nil {
+		return fmt.Errorf("PUT db failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 201 Created or 412 Precondition Failed (already exists) are both OK
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusPreconditionFailed {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ensure DB returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }

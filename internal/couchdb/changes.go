@@ -82,21 +82,13 @@ func (c *Client) FetchChanges(opts ChangesFeedOptions) (*ChangesResponse, error)
 	c.setAuth(req)
 	req.Header.Set("Accept", "application/json")
 
-	// Long-poll needs a much longer timeout
+	// Use a dedicated long-poll client (reuse to avoid connection leak)
 	timeout := time.Duration(opts.Timeout+15000) * time.Millisecond
 	if timeout < 75000 {
 		timeout = 75000
 	}
 
-	client := &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			MaxIdleConns:   10,
-			IdleConnTimeout: 90 * time.Second,
-		},
-	}
-
-	resp, err := client.Do(req)
+	resp, err := c.getChangesClient(timeout).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("changes feed request failed: %w", err)
 	}

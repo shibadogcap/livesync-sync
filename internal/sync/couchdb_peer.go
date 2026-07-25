@@ -118,28 +118,69 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 
 	localPath := p.ToLocalPath(path)
 
+	// Determine if content is text or binary (matching TS isPlainText)
+	isText := isPlainText(path)
+
 	// Split content into chunks
-	chunks, err := p.splitter.Split(data.Data, true)
+	chunks, err := p.splitter.Split(data.Data, isText)
 	if err != nil {
 		return false, fmt.Errorf("chunk split failed: %w", err)
 	}
 
+	// Compute document ID first (needed for _rev lookup)
+	docID, err := p.computeDocID(localPath)
+	if err != nil {
+		return false, err
+	}
+
+	// Get existing document revision for conflict-free updates
+	var existingRev string
+	if existing, err := p.client.GetDoc(docID); err == nil && existing != nil {
+		var existingEntry model.FileEntry
+		if json.Unmarshal(existing, &existingEntry) == nil {
+			existingRev = existingEntry.Rev
+		}
+	}
+
 	// Write chunks to CouchDB
 	var chunkIDs []string
+	fileType := model.TypePlain
+	if !isText {
+		fileType = model.TypeNewnote
+		// Binary files store content inline (newnote format)
+		dataStr := string(data.Data)
+		fileEntry := model.FileEntry{
+			Rev:      existingRev,
+			Path:     localPath,
+			CTime:    data.CTime,
+			MTime:    data.MTime,
+			Size:     data.Size,
+			Type:     fileType,
+			Data:     &dataStr,
+		}
+		entryJSON, err := json.Marshal(fileEntry)
+		if err != nil {
+			return false, err
+		}
+		if _, err := p.client.PutDoc(docID, entryJSON); err != nil {
+			return false, fmt.Errorf("file entry write failed: %w", err)
+		}
+		slog.Debug("[CouchDB] Binary file saved", "path", path)
+		return true, nil
+	}
+
+	// Text files: split into encrypted chunks
 	for _, chunk := range chunks {
-		// Encrypt chunk
 		encrypted, err := ccrypto.EncryptV2(chunk, p.params)
 		if err != nil {
 			return false, fmt.Errorf("chunk encrypt failed: %w", err)
 		}
 
-		// Compute chunk ID
 		chunkID, err := model.ComputeChunkID(chunk, p.config.Passphrase, model.DefaultHashAlg)
 		if err != nil {
 			return false, fmt.Errorf("chunk ID computation failed: %w", err)
 		}
 
-		// Write chunk document
 		chunkDoc := model.ChunkEntry{
 			ID:   chunkID,
 			Type: model.TypeChunk,
@@ -158,23 +199,19 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 		chunkIDs = append(chunkIDs, chunkID)
 	}
 
-	// Write metadata document (file entry)
+	// Write metadata document with _rev for conflict-free updates
+	fileType = model.TypePlain
 	fileEntry := model.FileEntry{
+		Rev:      existingRev,
 		Path:     localPath,
 		CTime:    data.CTime,
 		MTime:    data.MTime,
 		Size:     data.Size,
-		Type:     model.TypePlain,
+		Type:     fileType,
 		Children: chunkIDs,
 	}
 
 	entryJSON, err := json.Marshal(fileEntry)
-	if err != nil {
-		return false, err
-	}
-
-	// Compute path-based document ID (with obfuscation if configured)
-	docID, err := p.computeDocID(localPath)
 	if err != nil {
 		return false, err
 	}
@@ -188,7 +225,6 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 }
 
 func (p *CouchDBPeer) putPlain(path string, data FileData) (bool, error) {
-	// For unencrypted mode, just store the file content directly
 	if repeat, err := p.IsRepeating(path, &data); err != nil {
 		return false, err
 	} else if repeat {
@@ -197,20 +233,33 @@ func (p *CouchDBPeer) putPlain(path string, data FileData) (bool, error) {
 
 	localPath := p.ToLocalPath(path)
 
+	// Get existing document revision for conflict-free updates
+	docID, err := p.computeDocID(localPath)
+	if err != nil {
+		return false, err
+	}
+
+	var existingRev string
+	if existing, err := p.client.GetDoc(docID); err == nil && existing != nil {
+		var existingEntry model.FileEntry
+		if json.Unmarshal(existing, &existingEntry) == nil {
+			existingRev = existingEntry.Rev
+		}
+	}
+
+	// Store content inline as newnote (no encryption, no chunking)
+	dataStr := string(data.Data)
 	fileEntry := model.FileEntry{
+		Rev:   existingRev,
 		Path:  localPath,
 		CTime: data.CTime,
 		MTime: data.MTime,
 		Size:  data.Size,
 		Type:  model.TypeNewnote,
+		Data:  &dataStr,
 	}
 
 	entryJSON, err := json.Marshal(fileEntry)
-	if err != nil {
-		return false, err
-	}
-
-	docID, err := p.computeDocID(localPath)
 	if err != nil {
 		return false, err
 	}
@@ -246,7 +295,6 @@ func (p *CouchDBPeer) Get(path string) (*FileData, error) {
 		return nil, err
 	}
 
-	// Get file entry
 	raw, err := p.client.GetDoc(docID)
 	if err != nil {
 		return nil, err
@@ -264,10 +312,28 @@ func (p *CouchDBPeer) Get(path string) (*FileData, error) {
 		return &FileData{Deleted: true}, nil
 	}
 
-	// Fetch and decrypt chunks (fetchChunks decrypts each chunk individually)
-	content, err := p.fetchChunks(entry.Children)
-	if err != nil {
-		return nil, err
+	var content []byte
+
+	switch entry.Type {
+	case model.TypeNewnote:
+		// Binary files: content is inline in the Data field
+		if entry.Data != nil {
+			content = []byte(*entry.Data)
+		}
+	case model.TypePlain:
+		// Text files: content is in encrypted chunks
+		content, err = p.fetchChunks(entry.Children)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		// Legacy or unknown: try chunks first, fall back to inline data
+		content, err = p.fetchChunks(entry.Children)
+		if err != nil || len(content) == 0 {
+			if entry.Data != nil {
+				content = []byte(*entry.Data)
+			}
+		}
 	}
 
 	return &FileData{
@@ -407,8 +473,9 @@ func (p *CouchDBPeer) watchChanges(ctx context.Context) {
 			}
 
 			if change.Deleted {
-				// For deleted docs, use the doc ID as path (path may be in _deleted doc body)
-				p.dispatch(p, p.ToGlobalPath(change.ID), &FileData{Deleted: true})
+				// Try to extract path from _deleted document body; fall back to ID
+				filePath := p.extractPathFromChange(change)
+				p.dispatch(p, p.ToGlobalPath(filePath), &FileData{Deleted: true})
 			} else if change.Doc != nil {
 				p.processFileChange(change)
 			}
@@ -632,6 +699,53 @@ func (p *CouchDBPeer) probeWithBackoff() error {
 	}
 
 	return fmt.Errorf("couchdb not reachable after %d attempts", maxAttempts)
+}
+
+// isPlainText determines if a file path should be treated as plain text.
+// Matches obsidian-livesync's isPlainText() from string_and_binary/path.ts.
+// Binary files use newnote storage (inline data) instead of chunked storage.
+func isPlainText(path string) bool {
+	ext := strings.ToLower(path)
+	// Common binary extensions that should NOT be split into chunks
+	binaryExts := []string{
+		".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp", ".ico",
+		".mp3", ".mp4", ".wav", ".ogg", ".flac", ".avi", ".mov", ".mkv",
+		".zip", ".gz", ".tar", ".rar", ".7z",
+		".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+		".exe", ".dll", ".so", ".dylib", ".wasm",
+		".ttf", ".otf", ".woff", ".woff2",
+		".pyc", ".class", ".o", ".obj",
+	}
+	for _, be := range binaryExts {
+		if strings.HasSuffix(ext, be) {
+			return false
+		}
+	}
+	// Treat as text by default (this matches Obsidian vault content which is mostly markdown)
+	return true
+}
+
+// extractPathFromChange extracts the file path from a changes feed change entry.
+// For deletes, tries to read path from the _deleted doc body; falls back to change.ID.
+func (p *CouchDBPeer) extractPathFromChange(change couchdb.Change) string {
+	// Try to extract path from the document body if available
+	if change.Doc != nil {
+		var entry model.FileEntry
+		if err := json.Unmarshal(change.Doc, &entry); err == nil && entry.Path != "" {
+			return entry.Path
+		}
+	}
+	// Fallback: use the change ID
+	// Strip "f:" prefix if present (path obfuscation)
+	id := change.ID
+	if strings.HasPrefix(id, model.PrefixFile) {
+		id = strings.TrimPrefix(id, model.PrefixFile)
+		// If it's obfuscated, we can't reverse it; return as-is
+		if strings.HasPrefix(id, "%") {
+			return id
+		}
+	}
+	return id
 }
 
 

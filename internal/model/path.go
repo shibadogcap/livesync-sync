@@ -30,11 +30,9 @@ func NewPathConverter(baseDir string) *PathConverter {
 }
 
 // ToLocalPath converts a global (CouchDB-relative) path to a local filesystem path.
-// Matches Peer.toLocalPath() in livesync-now:
-//  1. Normalize backslashes to forward slashes
-//  2. Join with baseDir
-//  3. If result is ".", return ""
-//  4. If path starts with "_", prefix with "/"
+// Matches Peer.toLocalPath() in livesync-now.
+// NOTE: Do NOT special-case leading "_". The commonlib path2id_base/id2path_base
+// already handle "_". Adding special handling here causes double-mangling.
 func (pc *PathConverter) ToLocalPath(path string) string {
 	// Normalize Windows backslashes
 	normalized := strings.ReplaceAll(path, "\\", "/")
@@ -47,32 +45,20 @@ func (pc *PathConverter) ToLocalPath(path string) string {
 		return ""
 	}
 
-	// Handle "_" prefix (internal files)
-	if strings.HasPrefix(normalized, "_") && !strings.HasPrefix(joined, "/") {
-		joined = "/" + joined
-	}
-
 	return joined
 }
 
 // ToGlobalPath converts a local filesystem path to a global (CouchDB-relative) path.
-// Matches Peer.toGlobalPath() in livesync-now:
-//  1. Strip leading "_" from internal files
-//  2. Strip baseDir prefix (normalized)
-//  3. Normalize backslashes
+// Matches Peer.toGlobalPath() in livesync-now.
+// Does NOT strip "_" prefix; that is handled by path2id_base/id2path_base.
 func (pc *PathConverter) ToGlobalPath(path string) string {
-	// Strip leading "_"
 	result := path
-	if strings.HasPrefix(result, "_") {
-		result = result[1:]
-	}
 
 	// Strip baseDir prefix (try both configured and normalized versions)
 	baseDir := pc.BaseDir
 	if strings.HasPrefix(result, baseDir) {
 		result = strings.TrimPrefix(result, baseDir)
 	} else {
-		// Try with cleaned baseDir (e.g., "./vault" → "vault")
 		cleaned := filepath.Clean(baseDir)
 		if cleaned != baseDir && strings.HasPrefix(result, cleaned) {
 			result = strings.TrimPrefix(result, cleaned)
