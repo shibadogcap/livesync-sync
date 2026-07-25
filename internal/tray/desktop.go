@@ -80,9 +80,15 @@ func (m *desktopManager) handleEvents() {
 			if m.paused {
 				m.mPause.SetTitle("Resume Sync")
 				m.SetStatus("Paused")
+				if m.cfg.OnPause != nil {
+					m.cfg.OnPause()
+				}
 			} else {
 				m.mPause.SetTitle("Pause Sync")
 				m.SetStatus("Running")
+				if m.cfg.OnResume != nil {
+					m.cfg.OnResume()
+				}
 			}
 
 		case <-m.mOpen.ClickedCh:
@@ -101,6 +107,9 @@ func (m *desktopManager) handleEvents() {
 				m.mAuto.Check()
 			} else {
 				m.mAuto.Uncheck()
+			}
+			if err := SetAutostart(m.cfg.Autostart); err != nil {
+				slog.Warn("[Tray] Autostart toggle failed", "error", err)
 			}
 
 		case <-m.mQuit.ClickedCh:

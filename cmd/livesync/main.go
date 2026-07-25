@@ -131,7 +131,6 @@ func runWithTray(cfg *config.FullConfig, apiSrv *api.Server, hub *sync.Hub, stor
 		Enable:    cfg.Tray.Enable,
 		Autostart: cfg.Tray.Autostart,
 		OnOpenVault: func() {
-			// Open the first storage peer's directory
 			for _, p := range cfg.Sync.Peers {
 				if p.Type == "storage" && p.BaseDir != "" {
 					openFolder(p.BaseDir)
@@ -141,6 +140,16 @@ func runWithTray(cfg *config.FullConfig, apiSrv *api.Server, hub *sync.Hub, stor
 		},
 		OnSettings: func() {
 			apiSrv.OpenBrowser()
+		},
+		OnPause: func() {
+			if hub != nil {
+				hub.Stop()
+			}
+		},
+		OnResume: func() {
+			if hub != nil {
+				hub.Start()
+			}
 		},
 	})
 

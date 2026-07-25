@@ -27,4 +27,6 @@ type Config struct {
 	Autostart   bool
 	OnOpenVault func()   // Open vault folder
 	OnSettings  func()   // Open settings UI
+	OnPause     func()   // Pause sync
+	OnResume    func()   // Resume sync
 }
