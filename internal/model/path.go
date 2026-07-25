@@ -5,8 +5,12 @@ package model
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 // PathConverter handles path conversions between local filesystem and CouchDB document IDs.
@@ -98,24 +102,20 @@ func (pc *PathConverter) Path2ID(path string) (string, error) {
 }
 
 // ComputeChunkID computes a chunk document ID from content.
+// Matches obsidian-livesync's xxhash64-based chunk ID generation.
+// The chunk ID is "h:" + base36(xxhash64(content + ":" + passphrase + ":" + len(content))).
 func ComputeChunkID(content []byte, passphrase string, hashAlg string) (string, error) {
-	var combined []byte
-	combined = append(combined, content...)
-	combined = append(combined, []byte(passphrase)...)
-
-	var hashHex string
-
 	switch hashAlg {
 	case "sha1":
-		h := sha256.Sum256(combined)
-		hashHex = hex.EncodeToString(h[:20])
-	case "xxhash64", "":
-		h := sha256.Sum256(combined)
-		hashHex = hex.EncodeToString(h[:8])
+		h := sha256.Sum256(content)
+		return PrefixChunk + hex.EncodeToString(h[:20]), nil
+	case "xxhash64", "", "xxhash32":
+		// Match TS: xxhash.h64(`${piece}-${passphrase}-${piece.length}`).toString(36)
+		input := fmt.Sprintf("%s-%s-%d", string(content), passphrase, len(content))
+		h := xxhash.Sum64String(input)
+		return PrefixChunk + strconv.FormatUint(h, 36), nil
 	default:
-		h := sha256.Sum256(combined)
-		hashHex = hex.EncodeToString(h[:])
+		h := sha256.Sum256(content)
+		return PrefixChunk + hex.EncodeToString(h[:]), nil
 	}
-
-	return PrefixChunk + hashHex, nil
 }

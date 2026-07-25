@@ -87,6 +87,10 @@ func DetectVersion(data string) EncryptionVersion {
 		return Version2
 	case strings.HasPrefix(data, v3Prefix):
 		return Version3
+	case strings.HasPrefix(data, "["):
+		// V1 JSON array format: ["base64(ciphertext)","hex(iv)","hex(salt)"]
+		// This is the format produced by TS's encryptV1().
+		return Version1
 	case strings.HasPrefix(data, v1Prefix):
 		return Version1
 	default:

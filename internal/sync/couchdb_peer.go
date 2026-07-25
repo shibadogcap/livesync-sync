@@ -26,6 +26,7 @@ type CouchDBPeer struct {
 	params      *ccrypto.EncryptionParams
 	converter   *model.PathConverter
 	splitter    model.ChunkSplitter
+	obfuscator  *ccrypto.PathObfuscator
 
 	cancel     context.CancelFunc
 	done       chan struct{}
@@ -36,19 +37,25 @@ func NewCouchDBPeer(conf config.PeerConf, store *state.Store, dispatch DispatchF
 	client := couchdb.NewClient(conf.URL, conf.Database, conf.Username, conf.Password)
 
 	splitCfg := model.DefaultChunkConfig()
-	// Use V3 Rabin-Karp by default (matching obsidian-livesync default)
 	splitter := model.NewV3RabinKarpSplitter(splitCfg)
 
+	// Create path obfuscator if obfuscation passphrase is set
+	var obfuscator *ccrypto.PathObfuscator
+	if conf.ObfuscatePassphrase != "" {
+		obfuscator = ccrypto.NewPathObfuscator(conf.ObfuscatePassphrase, true)
+	}
+
 	return &CouchDBPeer{
-		BasePeer:  NewBasePeer(conf, store, dispatch),
-		client:    client,
-		config:    conf,
+		BasePeer:   NewBasePeer(conf, store, dispatch),
+		client:     client,
+		config:     conf,
 		params: &ccrypto.EncryptionParams{
 			Passphrase: conf.Passphrase,
 		},
-		converter: model.NewPathConverter(conf.BaseDir),
-		splitter:  splitter,
-		done:      make(chan struct{}),
+		converter:  model.NewPathConverter(conf.BaseDir),
+		splitter:   splitter,
+		obfuscator: obfuscator,
+		done:       make(chan struct{}),
 	}
 }
 
@@ -166,8 +173,8 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 		return false, err
 	}
 
-	// Compute path-based document ID
-	docID, err := p.converter.Path2ID(localPath)
+	// Compute path-based document ID (with obfuscation if configured)
+	docID, err := p.computeDocID(localPath)
 	if err != nil {
 		return false, err
 	}
@@ -203,7 +210,7 @@ func (p *CouchDBPeer) putPlain(path string, data FileData) (bool, error) {
 		return false, err
 	}
 
-	docID, err := p.converter.Path2ID(localPath)
+	docID, err := p.computeDocID(localPath)
 	if err != nil {
 		return false, err
 	}
@@ -215,10 +222,26 @@ func (p *CouchDBPeer) putPlain(path string, data FileData) (bool, error) {
 	return true, nil
 }
 
+// computeDocID computes an obfuscated document ID if path obfuscation is enabled.
+func (p *CouchDBPeer) computeDocID(localPath string) (string, error) {
+	baseID, err := p.converter.Path2ID(localPath)
+	if err != nil {
+		return "", err
+	}
+	if p.obfuscator != nil {
+		obfuscated, err := p.obfuscator.Obfuscate(baseID)
+		if err != nil {
+			return "", fmt.Errorf("path obfuscation failed: %w", err)
+		}
+		return model.PrefixFile + obfuscated, nil
+	}
+	return baseID, nil
+}
+
 // Get retrieves a file from CouchDB.
 func (p *CouchDBPeer) Get(path string) (*FileData, error) {
 	localPath := p.ToLocalPath(path)
-	docID, err := p.converter.Path2ID(localPath)
+	docID, err := p.computeDocID(localPath)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +289,7 @@ func (p *CouchDBPeer) Get(path string) (*FileData, error) {
 }
 
 // fetchChunks retrieves all chunk data for a file entry.
+// Each chunk must be decrypted individually before concatenation.
 func (p *CouchDBPeer) fetchChunks(children []string) ([]byte, error) {
 	if len(children) == 0 {
 		return []byte{}, nil
@@ -277,6 +301,7 @@ func (p *CouchDBPeer) fetchChunks(children []string) ([]byte, error) {
 		return nil, err
 	}
 
+	// Decrypt each chunk individually, then concatenate the plaintext
 	var allContent []byte
 	for _, chunkID := range children {
 		raw, ok := chunksMap[chunkID]
@@ -289,8 +314,21 @@ func (p *CouchDBPeer) fetchChunks(children []string) ([]byte, error) {
 			continue
 		}
 
-		// The chunk data is stored as a string which might be encrypted
-		allContent = append(allContent, []byte(chunk.Data)...)
+		chunkData := []byte(chunk.Data)
+
+		// Decrypt individually if passphrase is set
+		if p.config.Passphrase != "" && len(chunkData) > 0 {
+			decrypted, err := ccrypto.DecryptAuto(string(chunkData), p.params)
+			if err != nil {
+				slog.Warn("[CouchDB] Chunk decrypt failed", "chunk", chunkID, "error", err)
+				// Fallback: use raw data
+				allContent = append(allContent, chunkData...)
+			} else {
+				allContent = append(allContent, decrypted...)
+			}
+		} else {
+			allContent = append(allContent, chunkData...)
+		}
 	}
 
 	return allContent, nil
@@ -305,7 +343,7 @@ func (p *CouchDBPeer) Delete(path string) (bool, error) {
 	}
 
 	localPath := p.ToLocalPath(path)
-	docID, err := p.converter.Path2ID(localPath)
+	docID, err := p.computeDocID(localPath)
 	if err != nil {
 		return false, err
 	}
@@ -373,12 +411,13 @@ func (p *CouchDBPeer) watchChanges(ctx context.Context) {
 		backoff = 1 * time.Second // Reset on success
 
 		for _, change := range result.Results {
-			// Skip non-file documents (like _local docs, design docs)
+			// Skip non-file documents
 			if p.shouldSkipChange(change.ID) {
 				continue
 			}
 
 			if change.Deleted {
+				// For deleted docs, use the doc ID as path (path may be in _deleted doc body)
 				p.dispatch(p, p.ToGlobalPath(change.ID), &FileData{Deleted: true})
 			} else if change.Doc != nil {
 				p.processFileChange(change)
@@ -398,7 +437,7 @@ func (p *CouchDBPeer) watchChanges(ctx context.Context) {
 
 // shouldSkipChange returns true if the change should be ignored.
 func (p *CouchDBPeer) shouldSkipChange(id string) bool {
-	// Skip design documents
+	// Skip design documents and local docs
 	if len(id) > 0 && id[0] == '_' {
 		return true
 	}
@@ -415,14 +454,15 @@ func (p *CouchDBPeer) shouldSkipChange(id string) bool {
 			return true
 		}
 	}
-	// Skip chunk documents (managed automatically)
-	if len(id) > 1 && id[1] == ':' {
+	// Skip chunk documents only (h: prefix). File entries (f: prefix) must NOT be skipped.
+	if strings.HasPrefix(id, "h:") {
 		return true
 	}
 	return false
 }
 
 // processFileChange processes a document change from the changes feed.
+// Uses the document body's `path` field for dispatch, not the document ID.
 func (p *CouchDBPeer) processFileChange(change couchdb.Change) {
 	var entry model.FileEntry
 	if err := json.Unmarshal(change.Doc, &entry); err != nil {
@@ -435,24 +475,22 @@ func (p *CouchDBPeer) processFileChange(change couchdb.Change) {
 		return
 	}
 
+	// Use the path from the document body, NOT the document ID
+	filePath := entry.Path
+	if filePath == "" {
+		// Fallback: use document ID (for non-obfuscated setups)
+		filePath = change.ID
+	}
+
 	// Fetch and decrypt content
 	content, err := p.fetchChunks(entry.Children)
 	if err != nil {
-		slog.Warn("[CouchDB] Failed to fetch chunks", "id", change.ID, "error", err)
+		slog.Warn("[CouchDB] Failed to fetch chunks", "path", filePath, "error", err)
 		return
 	}
 
-	if p.config.Passphrase != "" && len(content) > 0 {
-		decrypted, err := ccrypto.DecryptAuto(string(content), p.params)
-		if err != nil {
-			slog.Warn("[CouchDB] Decrypt failed", "id", change.ID, "error", err)
-			return
-		}
-		content = decrypted
-	}
-
-	// Dispatch to hub
-	p.dispatch(p, p.ToGlobalPath(change.ID), &FileData{
+	// Dispatch to hub using the correct path
+	p.dispatch(p, p.ToGlobalPath(filePath), &FileData{
 		CTime: entry.CTime,
 		MTime: entry.MTime,
 		Size:  entry.Size,

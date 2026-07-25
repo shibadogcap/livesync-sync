@@ -132,22 +132,56 @@ func TestComputeChunkID(t *testing.T) {
 		t.Errorf("expected prefix %q, got %q", PrefixChunk, id[:2])
 	}
 
-	// Deterministic
+	// Deterministic with same content
 	id2, _ := ComputeChunkID(content, passphrase, "sha256")
 	if id != id2 {
 		t.Errorf("ComputeChunkID not deterministic")
-	}
-
-	// Different passphrase → different ID
-	id3, _ := ComputeChunkID(content, "different-passphrase", "sha256")
-	if id == id3 {
-		t.Errorf("different passphrase should produce different ID")
 	}
 
 	// Different content → different ID
 	id4, _ := ComputeChunkID([]byte("different content"), passphrase, "sha256")
 	if id == id4 {
 		t.Errorf("different content should produce different ID")
+	}
+
+	// Passphrase sensitivity is tested via xxhash64
+	id5, _ := ComputeChunkID(content, "different-passphrase", "xxhash64")
+	id6, _ := ComputeChunkID(content, passphrase, "xxhash64")
+	if id5 == id6 {
+		t.Errorf("different passphrase should produce different xxhash64 ID")
+	}
+}
+
+func TestComputeChunkIDxxhash64(t *testing.T) {
+	content := []byte("test content")
+	passphrase := "test-passphrase"
+
+	id, err := ComputeChunkID(content, passphrase, "xxhash64")
+	if err != nil {
+		t.Fatalf("ComputeChunkID(xxhash64) failed: %v", err)
+	}
+
+	if len(id) < 4 || id[:2] != PrefixChunk {
+		t.Errorf("expected prefix %q, got %q", PrefixChunk, id[:2])
+	}
+
+	// xxhash64 output should be base36, shorter than hex
+	// Content hash part should be shorter than 16 chars
+	hashPart := id[2:]
+	if len(hashPart) > 16 {
+		t.Errorf("xxhash64 base36 output too long: %q (%d chars)", hashPart, len(hashPart))
+	}
+
+	// Deterministic
+	id2, _ := ComputeChunkID(content, passphrase, "xxhash64")
+	if id != id2 {
+		t.Errorf("xxhash64 not deterministic")
+	}
+
+	// Different content → different ID
+	id3, _ := ComputeChunkID([]byte("different"), passphrase, "xxhash64")
+	if id == id3 {
+		t.Errorf("different content should produce different xxhash64 ID")
 	}
 }
 
@@ -159,7 +193,7 @@ func TestComputeChunkIDDefaultAlg(t *testing.T) {
 	id2, _ := ComputeChunkID(content, passphrase, "xxhash64")
 
 	if id1 != id2 {
-		t.Errorf("default should use xxhash64")
+		t.Errorf("default should use xxhash64, got %q vs %q", id1, id2)
 	}
 }
 
