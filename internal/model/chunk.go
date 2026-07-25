@@ -93,10 +93,15 @@ func (s *V2Splitter) splitText(content []byte, maxSize, minSize int) ([][]byte, 
 	var current []byte
 
 	for i, line := range lines {
-		// Add newline back except for the last line
-		lineWithNL := line
+		// Build a copy of the line with newline (avoid append modifying shared buffer)
+		var lineWithNL []byte
 		if i < len(lines)-1 {
-			lineWithNL = append(line, '\n')
+			lineWithNL = make([]byte, len(line)+1)
+			copy(lineWithNL, line)
+			lineWithNL[len(line)] = '\n'
+		} else {
+			lineWithNL = make([]byte, len(line))
+			copy(lineWithNL, line)
 		}
 
 		// If adding this line would exceed maxSize and we already have minSize content
@@ -111,13 +116,16 @@ func (s *V2Splitter) splitText(content []byte, maxSize, minSize int) ([][]byte, 
 				chunks = append(chunks, current)
 				current = nil
 			}
-			for len(lineWithNL) > 0 {
+			remaining := lineWithNL
+			for len(remaining) > 0 {
 				sliceSize := maxSize
-				if len(lineWithNL) < sliceSize {
-					sliceSize = len(lineWithNL)
+				if len(remaining) < sliceSize {
+					sliceSize = len(remaining)
 				}
-				chunks = append(chunks, lineWithNL[:sliceSize])
-				lineWithNL = lineWithNL[sliceSize:]
+				piece := make([]byte, sliceSize)
+				copy(piece, remaining[:sliceSize])
+				chunks = append(chunks, piece)
+				remaining = remaining[sliceSize:]
 			}
 			continue
 		}
@@ -221,36 +229,44 @@ func (s *V3RabinKarpSplitter) Split(content []byte, isText bool) ([][]byte, erro
 func (s *V3RabinKarpSplitter) splitRabinKarp(content []byte, avgSize, minSize, maxSize int) [][]byte {
 	var chunks [][]byte
 	start := 0
+	n := len(content)
 
-	for start < len(content) {
-		// End of this chunk
+	for start < n {
+		// Determine the end of the candidate chunk (bounded by maxSize and content length)
 		end := start + maxSize
-		if end > len(content) {
-			end = len(content)
+		if end > n {
+			end = n
 		}
 
-		// If we haven't reached minSize yet, continue
-		if end-start < minSize {
-			continue
+		remaining := end - start
+
+		// If we haven't reached minSize yet, append remaining content and finish
+		if remaining < minSize {
+			chunks = append(chunks, content[start:n])
+			break
 		}
 
 		// Try to find a natural boundary using rolling hash
 		boundary := -1
-		for i := start + rabinKarpWindowSize; i < end; i++ {
-			// Simple hash: just check the byte value for now
-			// This is a simplified version; the real algorithm uses polynomial rolling hash
-			hash := s.rollingHash(content[i-rabinKarpWindowSize : i])
-			if hash%uint64(avgSize) == 1 {
-				boundary = i
-				break
-			}
+		windowStart := start + rabinKarpWindowSize
+		if windowStart < start {
+			windowStart = start
+		}
 
-			// Also break at newlines for text
-			if content[i] == '\n' {
-				if i-start >= minSize {
-					boundary = i + 1
+		for i := windowStart; i < end; i++ {
+			// Rolling hash over the window
+			if i-rabinKarpWindowSize >= start {
+				hash := s.rollingHash(content[i-rabinKarpWindowSize : i])
+				if hash%uint64(avgSize) == 1 {
+					boundary = i
 					break
 				}
+			}
+
+			// Also break at newlines for text (respecting minSize)
+			if content[i] == '\n' && (i-start) >= minSize {
+				boundary = i + 1
+				break
 			}
 		}
 
@@ -258,7 +274,7 @@ func (s *V3RabinKarpSplitter) splitRabinKarp(content []byte, avgSize, minSize, m
 			chunks = append(chunks, content[start:boundary])
 			start = boundary
 		} else {
-			// No boundary found; use maxSize
+			// No boundary found; use full maxSize chunk
 			chunks = append(chunks, content[start:end])
 			start = end
 		}

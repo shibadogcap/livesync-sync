@@ -64,15 +64,15 @@ func (c *Client) setAuth(req *http.Request) {
 
 // Probe checks if the CouchDB server is reachable and the database exists.
 func (c *Client) Probe() error {
-	// Check server
-	resp, err := c.client.Get(c.baseURL + "/")
+	// Check server with auth
+	resp, err := c.request("GET", c.baseURL+"/", nil)
 	if err != nil {
 		return fmt.Errorf("server unreachable: %w", err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
+		return fmt.Errorf("server returned %d (auth required?)", resp.StatusCode)
 	}
 
 	// Check database exists
@@ -80,7 +80,7 @@ func (c *Client) Probe() error {
 	if err != nil {
 		return fmt.Errorf("database unreachable: %w", err)
 	}
-	defer resp2.Body.Close()
+	resp2.Body.Close()
 
 	if resp2.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("database '%s' not found", c.database)

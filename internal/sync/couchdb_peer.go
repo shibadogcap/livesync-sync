@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -459,29 +461,53 @@ func (p *CouchDBPeer) processFileChange(change couchdb.Change) {
 }
 
 // loadSyncParameters reads the SyncParameters document from CouchDB.
+// The PBKDF2 salt is stored as base64 in the doc and decoded to raw bytes for use.
 func (p *CouchDBPeer) loadSyncParameters() error {
 	var params model.SyncParameters
 	if err := p.client.GetLocalDocJSON(model.SyncParamsDocID, &params); err != nil {
 		return err
 	}
 
-	// If no sync params exist, create them
+	// If no sync params exist, create them with a fresh PBKDF2 salt
 	if params.ID == "" {
+		newSalt := make([]byte, 32)
+		if _, err := rand.Read(newSalt); err != nil {
+			return fmt.Errorf("failed to generate PBKDF2 salt: %w", err)
+		}
 		params = model.SyncParameters{
 			ID:              model.SyncParamsDocID,
 			Type:            "sync-parameters",
 			ProtocolVersion: model.ProtocolAdvancedE2EE,
+			PBKDF2Salt:      base64.StdEncoding.EncodeToString(newSalt),
 		}
 		if _, err := p.client.PutLocalDocJSON(model.SyncParamsDocID, &params); err != nil {
 			return err
 		}
-		slog.Info("[CouchDB] Created sync parameters")
+		p.params.PBKDF2Salt = newSalt
+		slog.Info("[CouchDB] Created sync parameters with new PBKDF2 salt")
+		return nil
 	}
 
-	// Decode PBKDF2 salt
+	// Decode existing PBKDF2 salt (base64 → raw bytes)
 	if params.PBKDF2Salt != "" {
-		// Store salt for encryption
-		p.params.PBKDF2Salt = []byte(params.PBKDF2Salt)
+		decoded, err := base64.StdEncoding.DecodeString(params.PBKDF2Salt)
+		if err != nil {
+			return fmt.Errorf("failed to decode PBKDF2 salt: %w", err)
+		}
+		p.params.PBKDF2Salt = decoded
+		slog.Debug("[CouchDB] Loaded PBKDF2 salt", "len", len(decoded))
+	} else {
+		// Salt exists but is empty — generate one
+		newSalt := make([]byte, 32)
+		if _, err := rand.Read(newSalt); err != nil {
+			return fmt.Errorf("failed to generate PBKDF2 salt: %w", err)
+		}
+		params.PBKDF2Salt = base64.StdEncoding.EncodeToString(newSalt)
+		if _, err := p.client.PutLocalDocJSON(model.SyncParamsDocID, &params); err != nil {
+			return err
+		}
+		p.params.PBKDF2Salt = newSalt
+		slog.Info("[CouchDB] Generated new PBKDF2 salt for existing sync params")
 	}
 
 	return nil
