@@ -143,7 +143,6 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 	}
 
 	// Write chunks to CouchDB
-	var chunkIDs []string
 	fileType := model.TypePlain
 	if !isText {
 		fileType = model.TypeNewnote
@@ -179,33 +178,62 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 	}
 
 	// Text files: split into encrypted chunks
+	// First pass: compute chunk IDs and fetch existing revisions
+	type chunkInfo struct {
+		id       string
+		encrypted string
+		rev      string
+	}
+	var chunkInfos []chunkInfo
+
 	for _, chunk := range chunks {
-		encrypted, err := ccrypto.EncryptV2(chunk, p.params)
-		if err != nil {
-			return false, fmt.Errorf("chunk encrypt failed: %w", err)
+		var encrypted string
+		var chunkErr error
+		encrypted, chunkErr = ccrypto.EncryptV2(chunk, p.params)
+		if chunkErr != nil {
+			return false, fmt.Errorf("chunk encrypt failed: %w", chunkErr)
 		}
 
-		chunkID, err := model.ComputeChunkID(chunk, p.config.Passphrase, model.CurrentHashAlg)
-		if err != nil {
-			return false, fmt.Errorf("chunk ID computation failed: %w", err)
+		chunkID, chunkErr := model.ComputeChunkID(chunk, p.config.Passphrase, model.CurrentHashAlg)
+		if chunkErr != nil {
+			return false, fmt.Errorf("chunk ID computation failed: %w", chunkErr)
 		}
 
+		chunkInfos = append(chunkInfos, chunkInfo{id: chunkID, encrypted: encrypted})
+	}
+
+	// Bulk-fetch existing chunk revisions to avoid 409 conflicts
+	chunkIDs := make([]string, len(chunkInfos))
+	for i, ci := range chunkInfos {
+		chunkIDs[i] = ci.id
+	}
+	existingChunks, _ := p.client.BulkGetDocs(chunkIDs)
+	for i := range chunkInfos {
+		if raw, ok := existingChunks[chunkInfos[i].id]; ok {
+			var existing model.ChunkEntry
+			if json.Unmarshal(raw, &existing) == nil && existing.Rev != "" {
+				chunkInfos[i].rev = existing.Rev
+			}
+		}
+	}
+
+	// Second pass: write chunks with _rev
+	var finalChunkIDs []string
+	for _, ci := range chunkInfos {
 		chunkDoc := model.ChunkEntry{
-			ID:   chunkID,
+			ID:   ci.id,
+			Rev:  ci.rev,
 			Type: model.TypeChunk,
-			Data: encrypted,
+			Data: ci.encrypted,
 		}
-
 		chunkJSON, err := json.Marshal(chunkDoc)
 		if err != nil {
 			return false, err
 		}
-
-		if _, err := p.client.PutDoc(chunkID, chunkJSON); err != nil {
+		if _, err := p.client.PutDoc(ci.id, chunkJSON); err != nil {
 			return false, fmt.Errorf("chunk write failed: %w", err)
 		}
-
-		chunkIDs = append(chunkIDs, chunkID)
+		finalChunkIDs = append(finalChunkIDs, ci.id)
 	}
 
 	// Write metadata document with _rev for conflict-free updates
@@ -217,7 +245,7 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 		MTime:    data.MTime,
 		Size:     data.Size,
 		Type:     fileType,
-		Children: chunkIDs,
+		Children: finalChunkIDs,
 	}
 
 	entryJSON, err := json.Marshal(fileEntry)
@@ -229,7 +257,7 @@ func (p *CouchDBPeer) putEncrypted(path string, data FileData) (bool, error) {
 		return false, fmt.Errorf("file entry write failed: %w", err)
 	}
 
-	slog.Debug("[CouchDB] File saved", "path", path, "chunks", len(chunkIDs))
+	slog.Debug("[CouchDB] File saved", "path", path, "chunks", len(finalChunkIDs))
 	return true, nil
 }
 
@@ -745,17 +773,18 @@ func (p *CouchDBPeer) probeWithBackoff() error {
 // Uses the exact same whitelist approach: only known text extensions return true.
 // Everything else (including unknown extensions) is treated as binary (newnote).
 func isPlainText(path string) bool {
-	ext := strings.ToLower(path)
+	// Match TS exactly: case-sensitive extension check
+	// TS reference: lib/src/string_and_binary/path.ts isPlainText()
 	switch {
-	case strings.HasSuffix(ext, ".md"),
-		strings.HasSuffix(ext, ".txt"),
-		strings.HasSuffix(ext, ".svg"),
-		strings.HasSuffix(ext, ".html"),
-		strings.HasSuffix(ext, ".csv"),
-		strings.HasSuffix(ext, ".css"),
-		strings.HasSuffix(ext, ".js"),
-		strings.HasSuffix(ext, ".xml"),
-		strings.HasSuffix(ext, ".canvas"):
+	case strings.HasSuffix(path, ".md"),
+		strings.HasSuffix(path, ".txt"),
+		strings.HasSuffix(path, ".svg"),
+		strings.HasSuffix(path, ".html"),
+		strings.HasSuffix(path, ".csv"),
+		strings.HasSuffix(path, ".css"),
+		strings.HasSuffix(path, ".js"),
+		strings.HasSuffix(path, ".xml"),
+		strings.HasSuffix(path, ".canvas"):
 		return true
 	default:
 		return false

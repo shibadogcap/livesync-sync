@@ -116,8 +116,8 @@ func (bp *BasePeer) ToGlobalPath(path string) string {
 func (bp *BasePeer) IsRepeating(path string, data *FileData) (bool, error) {
 	var hashStr string
 	if data == nil {
-		// Deletion marker
-		h := sha256.Sum256([]byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}) // \u0001Deleted
+		// Deletion marker — match TS: computeHash(["\u0001Deleted"])
+		h := sha256.Sum256([]byte("\u0001Deleted"))
 		hashStr = hex.EncodeToString(h[:])
 	} else {
 		hashStr = computeContentHash(data.Data)
