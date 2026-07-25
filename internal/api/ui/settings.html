@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>livesync-sync Settings</title>
+<style>
+:root { --bg: #1e1e2e; --surface: #2a2a3e; --text: #cdd6f4; --accent: #89b4fa; --green: #a6e3a1; --red: #f38ba8; --border: #45475a; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); padding: 20px; }
+h1 { font-size: 1.4em; margin-bottom: 20px; color: var(--accent); }
+.section { background: var(--surface); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.section h2 { font-size: 1em; margin-bottom: 12px; color: var(--accent); opacity: .8; }
+.row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.row label { min-width: 140px; font-size: .9em; }
+.row input, .row select { flex:1; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: .9em; }
+.row input:focus { outline: none; border-color: var(--accent); }
+.btn { padding: 8px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: .9em; }
+.btn-primary { background: var(--accent); color: #111; }
+.btn-primary:hover { opacity: .85; }
+.btn-danger { background: var(--red); color: #111; }
+.status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+.status-running { background: var(--green); }
+.status-paused { background: #f9e2af; }
+.status-stopped { background: var(--red); }
+.hidden { display: none; }
+.toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 24px; border-radius: 6px; color: #111; font-size: .9em; z-index: 999; transition: opacity .3s; }
+.toast-success { background: var(--green); }
+.toast-error { background: var(--red); color: #fff; }
+</style>
+</head>
+<body>
+
+<h1>⚙️ livesync-sync Settings</h1>
+
+<div id="statusBar" class="section" style="display:flex; align-items:center; gap:12px;">
+  <span id="statusDot" class="status-dot status-stopped"></span>
+  <span id="statusText">Checking...</span>
+  <span style="flex:1"></span>
+  <button class="btn btn-primary" onclick="toggleSync()" id="toggleBtn">Start</button>
+</div>
+
+<div class="section">
+  <h2>CouchDB Connection</h2>
+  <div class="row"><label>URL</label><input id="couchUrl" placeholder="http://localhost:5984"/></div>
+  <div class="row"><label>Database</label><input id="couchDb" placeholder="myvault"/></div>
+  <div class="row"><label>Username</label><input id="couchUser" placeholder="admin"/></div>
+  <div class="row"><label>Password</label><input id="couchPass" type="password" placeholder="••••••••"/></div>
+  <div class="row"><label>Passphrase</label><input id="couchPassphrase" type="password" placeholder="E2EE key"/></div>
+</div>
+
+<div class="section">
+  <h2>Local Storage</h2>
+  <div class="row"><label>Vault Path</label><input id="storageDir" placeholder="/path/to/vault"/></div>
+</div>
+
+<div class="section">
+  <h2>Options</h2>
+  <div class="row">
+    <label>Scan offline changes</label>
+    <input type="checkbox" id="scanOffline" style="width:auto"/>
+  </div>
+  <div class="row">
+    <label>Auto-start</label>
+    <input type="checkbox" id="autoStart" style="width:auto"/>
+  </div>
+  <div class="row">
+    <label>Log level</label>
+    <select id="logLevel">
+      <option value="debug">Debug</option>
+      <option value="info" selected>Info</option>
+      <option value="warn">Warn</option>
+      <option value="error">Error</option>
+    </select>
+  </div>
+</div>
+
+<div style="display:flex; gap:8px;">
+  <button class="btn btn-primary" onclick="saveConfig()">Save Settings</button>
+  <button class="btn btn-danger" onclick="resetSync()">Reset Sync State</button>
+</div>
+
+<p style="margin-top:16px; font-size:.8em; opacity:.5;">
+  Config file: <span id="configPath">~/.livesync/config.json</span>
+</p>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+async function getConfig() {
+  const r = await fetch('/api/config');
+  return r.json();
+}
+
+async function setConfig(cfg) {
+  const r = await fetch('/api/config', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(cfg),
+  });
+  return r.ok;
+}
+
+async function getStatus() {
+  const r = await fetch('/api/status');
+  return r.json();
+}
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast toast-' + type;
+  t.classList.remove('hidden');
+  setTimeout(() => t.classList.add('hidden'), 3000);
+}
+
+async function loadConfig() {
+  try {
+    const c = await getConfig();
+    document.getElementById('couchUrl').value = c.sync?.peers?.[0]?.url || '';
+    document.getElementById('couchDb').value = c.sync?.peers?.[0]?.database || '';
+    document.getElementById('couchUser').value = c.sync?.peers?.[0]?.username || '';
+    document.getElementById('couchPass').value = c.sync?.peers?.[0]?.password || '';
+    document.getElementById('couchPassphrase').value = c.sync?.peers?.[0]?.passphrase || '';
+    document.getElementById('storageDir').value = c.sync?.peers?.[1]?.baseDir || '';
+    document.getElementById('logLevel').value = c.logging?.level || 'info';
+  } catch(e) {
+    showToast('Failed to load config', 'error');
+  }
+  updateStatus();
+}
+
+async function updateStatus() {
+  try {
+    const s = await getStatus();
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    const btn = document.getElementById('toggleBtn');
+    if (s.running) {
+      dot.className = 'status-dot status-running';
+      txt.textContent = '● Running (' + s.peers + ')';
+      btn.textContent = 'Pause';
+    } else {
+      dot.className = 'status-dot status-stopped';
+      txt.textContent = '○ Stopped';
+      btn.textContent = 'Start';
+    }
+  } catch(e) {}
+}
+
+async function saveConfig() {
+  const peers = [
+    {
+      type: 'couchdb',
+      name: 'remote',
+      url: document.getElementById('couchUrl').value,
+      database: document.getElementById('couchDb').value,
+      username: document.getElementById('couchUser').value,
+      password: document.getElementById('couchPass').value,
+      passphrase: document.getElementById('couchPassphrase').value,
+      baseDir: '',
+    },
+    {
+      type: 'storage',
+      name: 'local',
+      baseDir: document.getElementById('storageDir').value,
+      scanOfflineChanges: document.getElementById('scanOffline').checked,
+    },
+  ];
+  const cfg = {
+    sync: { peers },
+    logging: { level: document.getElementById('logLevel').value },
+    tray: { autostart: document.getElementById('autoStart').checked },
+  };
+  if (await setConfig(cfg)) {
+    showToast('Settings saved successfully', 'success');
+  } else {
+    showToast('Failed to save settings', 'error');
+  }
+}
+
+async function toggleSync() {
+  const btn = document.getElementById('toggleBtn');
+  const isRunning = btn.textContent === 'Pause';
+  await fetch('/api/sync/' + (isRunning ? 'pause' : 'resume'), { method: 'POST' });
+  updateStatus();
+}
+
+async function resetSync() {
+  if (confirm('Reset sync state? This will re-sync all files from scratch.')) {
+    await fetch('/api/sync/reset', { method: 'POST' });
+    showToast('Sync state reset. Restart to apply.', 'success');
+  }
+}
+
+loadConfig();
+setInterval(updateStatus, 5000);
+</script>
+</body>
+</html>

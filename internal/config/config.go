@@ -5,6 +5,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,4 +273,36 @@ func IsCouchDBPeer(p *PeerConf) bool {
 // IsStoragePeer returns true if the peer config is for storage (filesystem).
 func IsStoragePeer(p *PeerConf) bool {
 	return p.Type == "storage"
+}
+
+// SaveConfig persists the configuration to the default config file path.
+// Writes as JSON to ~/.livesync/config.json.
+func SaveConfig(cfg *FullConfig) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot determine home dir: %w", err)
+	}
+
+	dir := filepath.Join(home, ".livesync")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("cannot create config dir: %w", err)
+	}
+
+	path := filepath.Join(dir, "config.json")
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config failed: %w", err)
+	}
+
+	// Atomic write: write to temp file then rename
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("write config failed: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename config failed: %w", err)
+	}
+
+	slog.Info("[Config] Saved to", "path", path)
+	return nil
 }
