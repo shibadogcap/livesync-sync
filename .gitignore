@@ -1,0 +1,13 @@
+build/
+*.exe
+*.exe~
+*.test
+*.out
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+.env
+state.json
+.livesync_storage.json
+*.log
