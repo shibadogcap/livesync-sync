@@ -57,6 +57,17 @@ func main() {
 	// Create hub first (pre-declared for closures), start later
 	var hub *sync.Hub
 
+	// Status function that lazily reads from hub (updated after hub creation)
+	hubStatusFn := func() map[string]interface{} {
+		if hub == nil {
+			return map[string]interface{}{"running": false, "peers": 0}
+		}
+		return map[string]interface{}{
+			"running": true,
+			"peers":   len(hub.Peers()),
+		}
+	}
+
 	// Start settings API server before sync engine (UI must always be accessible)
 	apiSrv := api.New(cfg,
 		api.WithOnSave(func(newCfg *config.FullConfig) error {
@@ -78,6 +89,7 @@ func main() {
 			return nil
 		}),
 		api.WithRunning(true),
+		api.WithHubStatus(hubStatusFn),
 	)
 
 	go func() {

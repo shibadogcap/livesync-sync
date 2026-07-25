@@ -1,5 +1,4 @@
-// Package api provides the embedded settings HTTP server.
-// Serves the settings UI and provides REST endpoints for config/status management.
+// Package api provides the embedded settings HTTP server and REST API.
 package api
 
 import (
@@ -12,27 +11,41 @@ import (
 	"os/exec"
 	"runtime"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/user/livesync-sync/internal/config"
 )
 
 //go:embed ui/settings.html
 var settingsUI embed.FS
 
-// Server is the embedded settings HTTP server.
+// Server is the HTTP server providing settings UI, config API, and vault REST API.
 type Server struct {
 	cfg     *config.FullConfig
 	onSave  func(*config.FullConfig) error
 	onReset func() error
 	onPause func(bool) error
 	running bool
+
+	// REST API
+	vaultHandler *VaultHandler
+
+	// hub status access
+	hubStatus func() map[string]interface{}
 }
 
-// New creates a new settings API server.
+// New creates a new API server.
 func New(cfg *config.FullConfig, opts ...Option) *Server {
 	s := &Server{cfg: cfg}
 	for _, o := range opts {
 		o(s)
 	}
+
+	// Initialize vault ops (find first storage peer's base dir)
+	if baseDir := findFirstStorageDir(cfg); baseDir != "" {
+		ops := NewVaultOps(baseDir)
+		s.vaultHandler = NewVaultHandler(ops, s)
+	}
+
 	return s
 }
 
@@ -59,12 +72,17 @@ func WithRunning(running bool) Option {
 	return func(s *Server) { s.running = running }
 }
 
-// ListenAndServe starts the HTTP server on the configured address.
+// WithHubStatus provides a function to query hub status.
+func WithHubStatus(fn func() map[string]interface{}) Option {
+	return func(s *Server) { s.hubStatus = fn }
+}
+
+// ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe() error {
-	mux := http.NewServeMux()
+	r := chi.NewRouter()
 
 	// Settings UI
-	mux.HandleFunc("/settings", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/settings", func(w http.ResponseWriter, r *http.Request) {
 		data, err := settingsUI.ReadFile("ui/settings.html")
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -75,19 +93,21 @@ func (s *Server) ListenAndServe() error {
 	})
 
 	// Config endpoints
-	mux.HandleFunc("/api/config", s.handleConfig)
-	mux.HandleFunc("/api/status", s.handleStatus)
-	mux.HandleFunc("/api/sync/pause", s.handlePause)
-	mux.HandleFunc("/api/sync/resume", s.handleResume)
-	mux.HandleFunc("/api/sync/reset", s.handleReset)
+	r.Get("/api/config", s.handleConfig)
+	r.Put("/api/config", s.handleConfig)
+	r.Get("/api/status", s.handleStatus)
+	r.Post("/api/sync/pause", s.handlePause)
+	r.Post("/api/sync/resume", s.handleResume)
+	r.Post("/api/sync/reset", s.handleReset)
+
+	// Vault REST API (if vault handler is configured)
+	if s.vaultHandler != nil {
+		s.vaultHandler.Mount(r)
+	}
 
 	// Redirect root to settings
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/settings", http.StatusFound)
-			return
-		}
-		http.NotFound(w, r)
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/settings", http.StatusFound)
 	})
 
 	addr := s.cfg.API.Listen
@@ -101,7 +121,7 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	slog.Info("[API] Settings UI available at", "url", fmt.Sprintf("http://%s/settings", addr))
-	return http.Serve(listener, mux)
+	return http.Serve(listener, r)
 }
 
 // OpenBrowser opens the settings UI in the default browser.
@@ -124,82 +144,105 @@ func (s *Server) OpenBrowser() {
 	}
 }
 
+// HubProvider implementation for the vault handler.
+func (s *Server) Pause() {
+	if s.onPause != nil {
+		s.onPause(true)
+	}
+	s.running = false
+}
+
+func (s *Server) Resume() {
+	if s.onPause != nil {
+		s.onPause(false)
+	}
+	s.running = true
+}
+
+func (s *Server) Status() map[string]interface{} {
+	if s.hubStatus != nil {
+		return s.hubStatus()
+	}
+	peerCount := len(s.cfg.Sync.Peers)
+	return map[string]interface{}{
+		"running": s.running,
+		"peers":   peerCount,
+	}
+}
+
+// findFirstStorageDir finds the first storage peer's base directory from config.
+func findFirstStorageDir(cfg *config.FullConfig) string {
+	for _, p := range cfg.Sync.Peers {
+		if p.Type == "storage" && p.BaseDir != "" {
+			return p.BaseDir
+		}
+	}
+	return ""
+}
+
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
 	switch r.Method {
-	case "GET":
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(s.cfg)
-
-	case "PUT":
+	case http.MethodGet:
+		writeJSON(w, s.cfg)
+	case http.MethodPut:
 		var newCfg config.FullConfig
 		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 			http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
 			return
 		}
-
 		if s.onSave != nil {
 			if err := s.onSave(&newCfg); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
-
 		s.cfg = &newCfg
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
-
+		writeJSON(w, map[string]bool{"ok": true})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	peerCount := len(s.cfg.Sync.Peers)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"running": s.running,
-		"peers":   peerCount,
-		"version": "dev",
-	})
+	st := s.Status()
+	st["version"] = "dev"
+	writeJSON(w, st)
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
+	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.onPause != nil {
-		s.onPause(true)
-	}
-	s.running = false
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	s.Pause()
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
+	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.onPause != nil {
-		s.onPause(false)
-	}
-	s.running = true
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	s.Resume()
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
+	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if s.onReset != nil {
 		s.onReset()
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	writeJSON(w, map[string]bool{"ok": true})
 }
+
+// writeJSON is a helper to write JSON responses.
+func writeJSON(w http.ResponseWriter, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+// Ensure unused import is used
+var _ = runtime.GOOS
