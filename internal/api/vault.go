@@ -23,6 +23,11 @@ func NewVaultOps(baseDir string) *VaultOps {
 	return &VaultOps{baseDir: abs}
 }
 
+// BaseDir returns the absolute base directory path.
+func (vo *VaultOps) BaseDir() string {
+	return vo.baseDir
+}
+
 // resolve checks path traversal and returns absolute path.
 func (vo *VaultOps) resolve(vaultPath string) (string, error) {
 	full := filepath.Join(vo.baseDir, vaultPath)

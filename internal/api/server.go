@@ -103,6 +103,11 @@ func (s *Server) ListenAndServe() error {
 	// Vault REST API (if vault handler is configured)
 	if s.vaultHandler != nil {
 		s.vaultHandler.Mount(r)
+
+		// MCP server (uses the same vault ops)
+		mcpHandler := NewMCPHandler(s.vaultHandler.Ops)
+		r.Post("/mcp", mcpHandler.HandleRequest)
+		r.Get("/mcp", mcpHandler.HandleRequest) // Some clients use GET
 	}
 
 	// Redirect root to settings

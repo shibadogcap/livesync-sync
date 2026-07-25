@@ -12,7 +12,7 @@ import (
 
 // VaultHandler handles vault-related HTTP endpoints.
 type VaultHandler struct {
-	ops *VaultOps
+	Ops *VaultOps
 	hub HubProvider
 }
 
@@ -25,7 +25,7 @@ type HubProvider interface {
 
 // NewVaultHandler creates a new VaultHandler.
 func NewVaultHandler(ops *VaultOps, hub HubProvider) *VaultHandler {
-	return &VaultHandler{ops: ops, hub: hub}
+	return &VaultHandler{Ops: ops, hub: hub}
 }
 
 // Mount adds vault routes to the given chi router.
@@ -53,7 +53,7 @@ func (h *VaultHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try to read as file first
-	data, info, err := h.ops.ReadFile(vaultPath)
+	data, info, err := h.Ops.ReadFile(vaultPath)
 	if err == nil {
 		// File found — return content
 		accept := r.Header.Get("Accept")
@@ -75,7 +75,7 @@ func (h *VaultHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *VaultHandler) listDir(w http.ResponseWriter, r *http.Request, vaultPath string) {
-	entry, err := h.ops.ListDir(vaultPath)
+	entry, err := h.Ops.ListDir(vaultPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -113,7 +113,7 @@ func (h *VaultHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 		data = body
 	}
 
-	if err := h.ops.WriteFile(vaultPath, data); err != nil {
+	if err := h.Ops.WriteFile(vaultPath, data); err != nil {
 		slog.Warn("[API] Write failed", "path", vaultPath, "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -136,7 +136,7 @@ func (h *VaultHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.ops.AppendFile(vaultPath, body); err != nil {
+	if err := h.Ops.AppendFile(vaultPath, body); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -154,7 +154,7 @@ func (h *VaultHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	permanent := r.URL.Query().Get("permanent") == "true"
 
-	if err := h.ops.DeleteFile(vaultPath, permanent); err != nil {
+	if err := h.Ops.DeleteFile(vaultPath, permanent); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -166,7 +166,7 @@ func (h *VaultHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 func (h *VaultHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 
-	results, err := h.ops.SearchFiles(query)
+	results, err := h.Ops.SearchFiles(query)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -184,6 +184,6 @@ func (h *VaultHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
 // handleHealth handles GET /api/vault/health.
 func (h *VaultHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := h.hub.Status()
-	status["vault"] = h.ops.baseDir
+	status["vault"] = h.Ops.BaseDir()
 	writeJSON(w, status)
 }
