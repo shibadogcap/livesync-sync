@@ -117,7 +117,7 @@ func (s *Server) ListenAndServe() error {
 
 	addr := s.cfg.API.Listen
 	if addr == "" {
-		addr = "localhost:2324"
+		addr = "127.0.0.1:2324"
 	}
 
 	listener, err := net.Listen("tcp", addr)
@@ -133,7 +133,7 @@ func (s *Server) ListenAndServe() error {
 func (s *Server) OpenBrowser() {
 	addr := s.cfg.API.Listen
 	if addr == "" {
-		addr = "localhost:2324"
+		addr = "127.0.0.1:2324"
 	}
 	url := fmt.Sprintf("http://%s/settings", addr)
 

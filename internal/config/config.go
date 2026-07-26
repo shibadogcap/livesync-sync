@@ -57,7 +57,7 @@ type LoggingConfig struct {
 
 // APIConfig controls the embedded settings UI server (Phase 1).
 type APIConfig struct {
-	Listen string `yaml:"listen" json:"listen"` // e.g. "localhost:2324"
+	Listen string `yaml:"listen" json:"listen"` // e.g. "127.0.0.1:2324"
 }
 
 // TrayConfig controls system tray behavior.
@@ -100,7 +100,7 @@ func DefaultConfig() FullConfig {
 			MaxSize: 10,
 		},
 		API: APIConfig{
-			Listen: "localhost:2324",
+			Listen: "127.0.0.1:2324",
 		},
 		Tray: TrayConfig{
 			Enable:    true,

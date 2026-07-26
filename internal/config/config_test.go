@@ -17,8 +17,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Logging.Level != "info" {
 		t.Errorf("default log level = %q, want %q", cfg.Logging.Level, "info")
 	}
-	if cfg.API.Listen != "localhost:2324" {
-		t.Errorf("default API listen = %q, want %q", cfg.API.Listen, "localhost:2324")
+	if cfg.API.Listen != "127.0.0.1:2324" {
+		t.Errorf("default API listen = %q, want %q", cfg.API.Listen, "127.0.0.1:2324")
 	}
 	if cfg.Tray.Enable != true {
 		t.Errorf("default tray enable = %v, want true", cfg.Tray.Enable)
@@ -226,13 +226,16 @@ func TestConvertLegacyV2Format(t *testing.T) {
 // ============================================================
 
 func TestLoadConfigNoFile(t *testing.T) {
-	// Ensure no config file is found
+	// Ensure no config file is found by overriding HOME to an empty temp dir
 	os.Unsetenv("LSYNC_CONFIG")
 
-	// Temporarily change to a dir without any config
+	tmpHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", origHome)
+
 	origDir, _ := os.Getwd()
-	emptyDir := t.TempDir()
-	os.Chdir(emptyDir)
+	os.Chdir(tmpHome)
 	defer os.Chdir(origDir)
 
 	cfg, err := LoadConfig()
@@ -245,7 +248,7 @@ func TestLoadConfigNoFile(t *testing.T) {
 	}
 
 	// Should return defaults, not error
-	if cfg.API.Listen != "localhost:2324" {
+	if cfg.API.Listen != "127.0.0.1:2324" {
 		t.Errorf("expected default API listen, got %q", cfg.API.Listen)
 	}
 }
