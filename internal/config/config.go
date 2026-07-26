@@ -166,9 +166,12 @@ func LoadConfig() (*FullConfig, error) {
 	}
 
 	if !loaded {
-		// Return defaults if no config found
-		fmt.Println("[CONFIG] No config file found, using defaults")
+		// No config file found — create default config for first-run
+		fmt.Println("[CONFIG] No config file found, creating default config")
 		cfg = DefaultConfig()
+		if err := SaveConfig(&cfg); err != nil {
+			fmt.Printf("[CONFIG] Warning: could not create default config: %v\n", err)
+		}
 	}
 
 	// Apply environment variable overrides

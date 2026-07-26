@@ -36,13 +36,15 @@ func (m *desktopManager) Run() error {
 func (m *desktopManager) onReady() {
 	slog.Info("[Tray] Initializing system tray")
 
-	// Set icon (placeholder — 16x16 simple icon data)
-	// In production, embed actual icon bytes here
 	systray.SetTemplateIcon(sampleIcon, sampleIcon)
 	systray.SetTooltip("livesync-sync")
 
-	// Status (non-clickable display)
-	m.mStatus = systray.AddMenuItem("Status: Starting...", "Current status")
+	// Status display — use cached status if set before onReady
+	statusLabel := m.status
+	if statusLabel == "" {
+		statusLabel = "Starting..."
+	}
+	m.mStatus = systray.AddMenuItem("Status: "+statusLabel, "Current status")
 	m.mStatus.Disable()
 
 	systray.AddSeparator()
