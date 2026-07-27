@@ -15,3 +15,6 @@ state.json
 /livesync
 .livesync_storage.json
 dist/
+*.key
+*.crt
+*.b64
