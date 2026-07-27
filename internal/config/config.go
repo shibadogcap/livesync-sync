@@ -55,6 +55,15 @@ type LoggingConfig struct {
 	MaxSize int    `yaml:"maxSize" json:"maxSize"` // Max size in MB before rotation
 }
 
+// DefaultStateDir returns the default state directory (~/.livesync).
+func DefaultStateDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", ".livesync")
+	}
+	return filepath.Join(home, ".livesync")
+}
+
 // APIConfig controls the embedded settings UI server (Phase 1).
 type APIConfig struct {
 	Listen string `yaml:"listen" json:"listen"` // e.g. "127.0.0.1:2324"

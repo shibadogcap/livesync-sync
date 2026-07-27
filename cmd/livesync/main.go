@@ -40,6 +40,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Single instance lock (prevents duplicate startup)
+	lockFile := config.DefaultStateDir() + "/.lock"
+	lock, err := state.NewLock(lockFile)
+	if err != nil {
+		slog.Warn("[App] Another instance may already be running", "error", err)
+		fmt.Fprintf(os.Stderr, "Another instance is already running (lock: %s)\n", lockFile)
+		os.Exit(1)
+	}
+	defer lock.Unlock()
+
 	slog.Info("livesync-sync starting", "version", version)
 
 	// Initialize state store

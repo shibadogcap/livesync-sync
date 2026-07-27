@@ -51,14 +51,23 @@ h1 { font-size: 1.4em; margin-bottom: 20px; color: var(--accent); }
 
 <div class="section">
   <h2>Local Storage</h2>
-  <div class="row"><label>Vault Path</label><input id="storageDir" placeholder="/path/to/vault"/></div>
-</div>
-
-<div class="section">
-  <h2>Options</h2>
-  <div class="row">
-    <label>Scan offline changes</label>
-    <input type="checkbox" id="scanOffline" style="width:auto"/>
+    <div class="row">
+      <label>Vault Path</label>
+      <div style="flex:1; display:flex; gap:6px;">
+        <input id="storageDir" placeholder="C:\Users\me\vault or /home/user/vault" style="flex:1"/>
+        <button class="btn" onclick="browseFolder()" style="white-space:nowrap; background:var(--border); color:var(--text);">Browse…</button>
+      </div>
+    </div>
+    <div style="font-size:.8em; opacity:.6; padding-left:152px;">
+      On Windows: <code>C:\Users\yourname\vault</code> &nbsp;|&nbsp; On Mac/Linux: <code>/home/user/vault</code>
+    </div>
+    <div class="row" style="margin-top:6px;">
+      <label></label>
+      <label style="font-size:.85em; opacity:.8;">
+        <input type="checkbox" id="scanOffline" style="width:auto"/>
+        Scan for offline changes on startup
+      </label>
+    </div>
   </div>
   <div class="row">
     <label>Auto-start</label>
@@ -195,6 +204,25 @@ async function resetSync() {
 
 loadConfig();
 setInterval(updateStatus, 5000);
+
+async function browseFolder() {
+  // Use the File System Access API if available (Chrome 86+, Edge 86+)
+  try {
+    const dir = await window.showDirectoryPicker({mode: 'readwrite'});
+    // Convert FileSystemDirectoryHandle to a path hint
+    // The API only gives us the directory name, so we try to get
+    // the full path from the user via a prompt fallback
+    const input = document.getElementById('storageDir');
+    const partial = dir.name;
+    const full = prompt('Enter the full path to "' + partial + '":\n(Your browser only shows the folder name, not the full path)', input.value || partial);
+    if (full) input.value = full;
+  } catch(e) {
+    if (e.name === 'AbortError' || e.name === 'SecurityError') return;
+    // Fallback: manual entry explanation
+    showToast('Please type or paste the full folder path manually', '');
+    document.getElementById('storageDir').focus();
+  }
+}
 </script>
 </body>
 </html>
