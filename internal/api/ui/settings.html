@@ -95,6 +95,56 @@ h1 { font-size: 1.4em; margin-bottom: 20px; color: var(--accent); }
 
 <div id="toast" class="toast hidden"></div>
 
+<!-- File Browser Overlay -->
+<div id="browserOverlay" class="browser-overlay hidden" onclick="if(event.target===this)cancelBrowser()">
+  <div class="browser-dialog" onclick="event.stopPropagation()">
+    <div class="browser-header">
+      <h3>Select Vault Folder</h3>
+      <button class="btn" onclick="cancelBrowser()" style="background:transparent;color:var(--text);font-size:1.2em;">✕</button>
+    </div>
+    <div class="browser-addr">
+      <input id="browserPath" style="flex:1;padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:monospace;font-size:.85em;" readonly/>
+      <button class="btn btn-primary" onclick="selectBrowserPath()">Select</button>
+    </div>
+    <div id="browserList" class="browser-list">
+      <div style="padding:20px;text-align:center;opacity:.5;">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<style>
+.browser-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.5); z-index: 999;
+  display: flex; align-items: center; justify-content: center;
+}
+.browser-dialog {
+  background: var(--surface); border-radius: 8px;
+  width: 90%; max-width: 600px; max-height: 80vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0,0,0,.4);
+}
+.browser-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px; border-bottom: 1px solid var(--border);
+}
+.browser-header h3 { margin: 0; font-size: 1em; color: var(--accent); }
+.browser-addr {
+  display: flex; gap: 8px; padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.browser-list {
+  flex: 1; overflow-y: auto; padding: 4px 0;
+  min-height: 200px; max-height: 50vh;
+}
+.br-item {
+  padding: 6px 16px; cursor: pointer; font-size: .9em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.br-dir:hover { background: var(--bg); color: var(--accent); }
+.br-file { opacity: .5; cursor: default; }
+</style>
+
 <script>
 async function getConfig() {
   const r = await fetch('/api/config');
@@ -205,23 +255,71 @@ async function resetSync() {
 loadConfig();
 setInterval(updateStatus, 5000);
 
-async function browseFolder() {
-  // Use the File System Access API if available (Chrome 86+, Edge 86+)
+// --- File Browser ---
+let browserCb = null;
+
+function browseFolder() {
+  document.getElementById('browserOverlay').classList.remove('hidden');
+  document.getElementById('browserPath').value = '';
+  document.getElementById('browserList').innerHTML = '<div style="padding:20px;text-align:center;opacity:.5;">Loading…</div>';
+  browserCb = (path) => {
+    document.getElementById('storageDir').value = path;
+    document.getElementById('browserOverlay').classList.add('hidden');
+  };
+  loadBrowserList('');
+}
+
+async function loadBrowserList(path) {
+  const list = document.getElementById('browserList');
+  const url = '/api/browse' + (path ? '?path=' + encodeURIComponent(path) : '');
   try {
-    const dir = await window.showDirectoryPicker({mode: 'readwrite'});
-    // Convert FileSystemDirectoryHandle to a path hint
-    // The API only gives us the directory name, so we try to get
-    // the full path from the user via a prompt fallback
-    const input = document.getElementById('storageDir');
-    const partial = dir.name;
-    const full = prompt('Enter the full path to "' + partial + '":\n(Your browser only shows the folder name, not the full path)', input.value || partial);
-    if (full) input.value = full;
+    const r = await fetch(url);
+    const dir = await r.json();
+    renderBrowser(dir, path);
   } catch(e) {
-    if (e.name === 'AbortError' || e.name === 'SecurityError') return;
-    // Fallback: manual entry explanation
-    showToast('Please type or paste the full folder path manually', '');
-    document.getElementById('storageDir').focus();
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--red);">Error loading directory</div>';
   }
+}
+
+function renderBrowser(dir, path) {
+  const list = document.getElementById('browserList');
+  const p = document.getElementById('browserPath');
+  p.value = path || dir.path || dir.name;
+
+  if (!dir.children || dir.children.length === 0) {
+    list.innerHTML = '<div style="padding:20px;text-align:center;opacity:.5;">(empty)</div>';
+    return;
+  }
+
+  let html = '';
+  // Parent directory entry
+  if (path) {
+    const parent = path.split(/[\\\/]/).filter(Boolean).slice(0, -1).join('/') || '';
+    html += '<div class="br-item br-dir" onclick="loadBrowserList(\'' + parent.replace(/'/g,"\\'") + '\')">📁 ..</div>';
+  }
+  for (const child of dir.children) {
+    if (child.isDir) {
+      const childPath = path ? path + '/' + child.name : child.name;
+      const escaped = childPath.replace(/'/g, "\\'");
+      html += '<div class="br-item br-dir" onclick="loadBrowserList(\'' + escaped + '\')">📁 ' + escHtml(child.name) + '</div>';
+    } else {
+      html += '<div class="br-item br-file">📄 ' + escHtml(child.name) + '</div>';
+    }
+  }
+  list.innerHTML = html;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function selectBrowserPath() {
+  const path = document.getElementById('browserPath').value;
+  if (path && browserCb) browserCb(path);
+}
+
+function cancelBrowser() {
+  document.getElementById('browserOverlay').classList.add('hidden');
 }
 </script>
 </body>

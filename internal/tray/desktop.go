@@ -36,7 +36,9 @@ func (m *desktopManager) Run() error {
 func (m *desktopManager) onReady() {
 	slog.Info("[Tray] Initializing system tray")
 
-	systray.SetTemplateIcon(sampleIcon, sampleIcon)
+	// Use SetIcon on Windows/Linux, SetTemplateIcon on macOS.
+	// SetTemplateIcon makes macOS treat the icon as a template (adapts to dark/light menu bar).
+	systray.SetIcon(sampleIcon)
 	systray.SetTooltip("livesync-sync")
 
 	// Status display — use cached status if set before onReady

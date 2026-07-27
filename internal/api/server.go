@@ -100,6 +100,10 @@ func (s *Server) ListenAndServe() error {
 	r.Post("/api/sync/resume", s.handleResume)
 	r.Post("/api/sync/reset", s.handleReset)
 
+	// File browser for settings UI
+	r.Get("/api/browse", s.handleBrowse)
+	r.Get("/api/browse/parent", s.handleBrowseParent)
+
 	// Vault REST API (if vault handler is configured)
 	if s.vaultHandler != nil {
 		s.vaultHandler.Mount(r)
