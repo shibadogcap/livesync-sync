@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 // handleBrowse handles GET /api/browse?path=xxx
@@ -32,18 +34,32 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 }
 
 func isWindows() bool {
-	return len(os.Getenv("SYSTEMROOT")) > 0 && os.Getenv("SYSTEMROOT") != ""
+	return runtime.GOOS == "windows"
 }
 
-func listWindowsDrives() DirEntry {
-	root := DirEntry{Name: "Computer", Path: "", IsDir: true}
+func listWindowsDrives() *DirEntry {
+	root := &DirEntry{Name: "Computer", Path: "", IsDir: true}
 	for _, d := range "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
 		drive := string(d) + ":\\"
-		if _, err := os.Stat(drive); err == nil {
-			root.Children = append(root.Children, FileInfo{
-				Name:  string(d) + ":",
-				IsDir: true,
-			})
+		// Use a timeout to avoid hanging on empty CD-ROM/floppy drives
+		// os.Stat can block indefinitely on Windows for removable drives
+		ch := make(chan bool, 1)
+		go func(p string) {
+			_, err := os.Stat(p)
+			ch <- (err == nil)
+		}(drive)
+
+		select {
+		case exists := <-ch:
+			if exists {
+				root.Children = append(root.Children, FileInfo{
+					Name:  string(d) + ":",
+					IsDir: true,
+				})
+			}
+		case <-time.After(500 * time.Millisecond):
+			// Drive timeout — skip it (likely empty removable drive)
+			continue
 		}
 	}
 	return root
