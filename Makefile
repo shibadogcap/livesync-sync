@@ -1,11 +1,11 @@
-.PHONY: all build build-server win64 linux docker clean test
+.PHONY: all build build-server win64 win-console win-gui linux docker clean test win-rsrc
 
 APP := livesync
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X main.version=$(VERSION) -s -w"
 
-# Default: build with tray support (requires CGO)
-all: build
+# Default: build Linux desktop + Windows console (primary)
+all: build win-console
 
 # Linux desktop build (CGO enabled for tray support)
 build:
@@ -15,16 +15,27 @@ build:
 build-server:
 	CGO_ENABLED=0 go build $(LDFLAGS) -tags notray -o build/$(APP)-server ./cmd/$(APP)
 
-# Windows cross-compile (requires mingw-w64)
-win64:
+# Windows resource file (manifest + version info)
+# Requires mingw-w64: apt install gcc-mingw-w64-x86-64
+win-rsrc:
+	cd cmd/$(APP) && x86_64-w64-mingw32-windres -o rsrc_windows.syso livesync.rc
+
+# Windows console build (recommended, less Defender false positives)
+win-console: win-rsrc
 	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
 	CC=x86_64-w64-mingw32-gcc \
-	go build $(LDFLAGS) -ldflags "-H=windowsgui -X main.version=$(VERSION) -s -w" \
+	go build -ldflags "-X main.version=$(VERSION) -s -w" \
+	-o build/$(APP)-console.exe ./cmd/$(APP)
+
+# Windows GUI build (tray only, may trigger Defender)
+win-gui: win-rsrc
+	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
+	CC=x86_64-w64-mingw32-gcc \
+	go build -ldflags "-H=windowsgui -X main.version=$(VERSION) -s -w" \
 	-o build/$(APP).exe ./cmd/$(APP)
 
-# Linux (no tray, stripped)
-linux: build-server
-	@echo "Linux server build: build/$(APP)-server"
+# Windows all variants
+win: win-console win-gui
 
 # Docker image
 docker:

@@ -1,0 +1,32 @@
+#include <windows.h>
+
+1 24 "livesync.exe.manifest"
+
+1 VERSIONINFO
+FILEVERSION     0,1,0,0
+PRODUCTVERSION  0,1,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "livesync-sync"
+            VALUE "FileDescription", "Self-hosted LiveSync bidirectional file sync daemon"
+            VALUE "FileVersion", "0.1.0.0"
+            VALUE "InternalName", "livesync"
+            VALUE "LegalCopyright", ""
+            VALUE "OriginalFilename", "livesync.exe"
+            VALUE "ProductName", "livesync-sync"
+            VALUE "ProductVersion", "0.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
