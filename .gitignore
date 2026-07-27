@@ -14,3 +14,4 @@ state.json
 .tmp
 /livesync
 .livesync_storage.json
+dist/
