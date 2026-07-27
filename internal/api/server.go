@@ -115,27 +115,51 @@ func (s *Server) ListenAndServe() error {
 		http.Redirect(w, r, "/settings", http.StatusFound)
 	})
 
+	// Listen on both IPv4 (127.0.0.1) and IPv6 ([::1]) so that "localhost"
+	// resolves correctly regardless of whether the browser prefers IPv6 or IPv4.
+	// On Windows with bindv6only=1, tcp6 only serves IPv6, so we need both.
 	addr := s.cfg.API.Listen
 	if addr == "" {
 		addr = "127.0.0.1:2324"
 	}
 
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("api listen failed: %w", err)
+	v4Listener, v4Err := net.Listen("tcp4", addr)
+
+	// Derive the v6 address from the configured port
+	v6Addr := "[::1]:2324"
+	if _, port, err := net.SplitHostPort(addr); err == nil && port != "" {
+		v6Addr = "[::1]:" + port
+	}
+	v6Listener, v6Err := net.Listen("tcp6", v6Addr)
+
+	if v4Err != nil && v6Err != nil {
+		return fmt.Errorf("api listen failed on both v4 and v6: v4=%v, v6=%v", v4Err, v6Err)
 	}
 
-	slog.Info("[API] Settings UI available at", "url", fmt.Sprintf("http://%s/settings", addr))
-	return http.Serve(listener, r)
+	// Channel to collect serve errors
+	errCh := make(chan error, 2)
+
+	if v4Listener != nil {
+		go func() {
+			errCh <- http.Serve(v4Listener, r)
+		}()
+	}
+	if v6Listener != nil {
+		go func() {
+			errCh <- http.Serve(v6Listener, r)
+		}()
+	}
+
+	slog.Info("[API] Settings UI available at", "url", "http://localhost:2324/settings")
+
+	// Block until one of the listeners fails
+	return <-errCh
 }
 
 // OpenBrowser opens the settings UI in the default browser.
 func (s *Server) OpenBrowser() {
-	addr := s.cfg.API.Listen
-	if addr == "" {
-		addr = "127.0.0.1:2324"
-	}
-	url := fmt.Sprintf("http://%s/settings", addr)
+	// Use localhost (not 127.0.0.1) since we now listen on both v4 and v6
+	url := "http://localhost:2324/settings"
 
 	switch runtime.GOOS {
 	case "linux":
