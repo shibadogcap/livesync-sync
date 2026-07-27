@@ -20,12 +20,19 @@ build-server:
 win-rsrc:
 	cd cmd/$(APP) && x86_64-w64-mingw32-windres -o rsrc_windows.syso livesync.rc
 
-# Windows console build (recommended, less Defender false positives)
+# Windows console build (CGO enabled, may trigger Defender)
 win-console: win-rsrc
 	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
 	CC=x86_64-w64-mingw32-gcc \
 	go build -ldflags "-X main.version=$(VERSION) -s -w" \
 	-o build/$(APP)-console.exe ./cmd/$(APP)
+
+# Windows CGO-disabled build (recommended, least Defender false positives)
+# No tray icon, but settings UI available via browser.
+win-nocgo:
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+	go build -tags notray -ldflags "-X main.version=$(VERSION) -s -w" \
+	-o build/$(APP)-nocgo.exe ./cmd/$(APP)
 
 # Windows GUI build (tray only, may trigger Defender)
 win-gui: win-rsrc
@@ -35,7 +42,7 @@ win-gui: win-rsrc
 	-o build/$(APP).exe ./cmd/$(APP)
 
 # Windows all variants
-win: win-console win-gui
+win: win-nocgo win-console win-gui
 
 # Docker image
 docker:
